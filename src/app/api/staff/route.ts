@@ -185,10 +185,10 @@ export async function POST(request: Request) {
       );
     }
 
-    const managerEmail =
-      role === "manager" ? normalizeEmail(body.email ?? "") : null;
-    if (role === "manager" && (body.email ?? "").trim() && !managerEmail) {
-      return jsonNoStore({ error: "Manager email is invalid." }, 400);
+    const requestedEmail = (body.email ?? "").trim();
+    const normalizedEmail = normalizeEmail(requestedEmail);
+    if (requestedEmail && !normalizedEmail) {
+      return jsonNoStore({ error: "Email is invalid." }, 400);
     }
 
     const passcode = providedPasscode || generatePasscode();
@@ -196,7 +196,7 @@ export async function POST(request: Request) {
       return jsonNoStore({ error: "Passcode must be exactly 6 digits." }, 400);
     }
 
-    const email = managerEmail ?? internalEmailFor(phone);
+    const email = normalizedEmail ?? internalEmailFor(phone);
 
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
     console.info("[staff.create] createUser input", {

@@ -42,6 +42,10 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   // Public routes
+  if (pathname === "/reset-password") {
+    return supabaseResponse;
+  }
+
   if (pathname === "/login" || pathname === "/") {
     if (user) {
       // Logged in user on login page → redirect to appropriate home

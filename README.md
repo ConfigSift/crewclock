@@ -29,6 +29,9 @@ Run these SQL files in order inside the Supabase SQL Editor:
 1. Enable Email Auth (for admin/manager email login)
 2. Optional for local development: disable email confirmation
 3. Public self-signup is not used; accounts are created internally by admin/manager users
+4. Configure Supabase Auth Redirect URLs for password reset:
+   - Site URL: `NEXT_PUBLIC_APP_URL` (example: `http://localhost:3000`)
+   - Additional Redirect URL: `${NEXT_PUBLIC_APP_URL}/reset-password`
 
 ### 4. Configure Environment Variables
 
@@ -37,6 +40,7 @@ Copy `.env.local.example` to `.env.local` and set:
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+NEXT_PUBLIC_APP_URL=http://localhost:3000
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 ```
 
@@ -85,6 +89,7 @@ Open http://localhost:3000
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key |
+| `NEXT_PUBLIC_APP_URL` | Public app URL used for auth redirects (password reset) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only service role key |
 | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | Optional maps/geocoding key |
 

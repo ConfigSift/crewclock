@@ -46,6 +46,11 @@ type CreateStaffErrorPayload = {
   hint?: string | null;
 };
 
+type StaffAuthPayload = {
+  email?: string | null;
+  email_confirmed_at?: string | null;
+};
+
 type EditStaffPayload = {
   first_name: string;
   last_name: string;
@@ -105,6 +110,13 @@ export default function EmployeesPage() {
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [editError, setEditError] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailActionSaving, setEmailActionSaving] = useState(false);
+  const [emailActionMessage, setEmailActionMessage] = useState("");
+  const [staffAuthById, setStaffAuthById] = useState<Record<string, StaffAuthPayload>>(
+    {}
+  );
 
   const filtered = employees.filter((e) =>
     `${e.first_name} ${e.last_name}`
@@ -126,6 +138,12 @@ export default function EmployeesPage() {
     if (!profile) return false;
     return profile.role === "admin" || profile.id === ownerUserId;
   }, [profile, ownerUserId]);
+
+  const isInternalEmail = (email: string | null | undefined): boolean =>
+    Boolean(email && email.toLowerCase().endsWith("@internal.crewclock.local"));
+
+  const isRealEmail = (email: string | null | undefined): boolean =>
+    Boolean(email && !isInternalEmail(email));
 
   useEffect(() => {
     if (!passcodeReveal) return;
@@ -162,6 +180,44 @@ export default function EmployeesPage() {
       cancelled = true;
     };
   }, [profile]);
+
+  useEffect(() => {
+    if (!isOwnerOrAdmin) {
+      setStaffAuthById({});
+      return;
+    }
+    const targets = employees.map((emp) => emp.id);
+    if (targets.length === 0) {
+      setStaffAuthById({});
+      return;
+    }
+
+    let cancelled = false;
+
+    const load = async () => {
+      const response = await fetch(
+        `/api/staff/emails?ids=${encodeURIComponent(targets.join(","))}`,
+        {
+          method: "GET",
+          cache: "no-store",
+        }
+      );
+
+      const payload = (await response.json().catch(() => null)) as
+        | { emails?: Record<string, StaffAuthPayload> }
+        | null;
+
+      if (!response.ok || !payload?.emails) return;
+      if (!cancelled) {
+        setStaffAuthById(payload.emails);
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [employees, isOwnerOrAdmin]);
 
   const resetForm = () => {
     setForm(emptyForm);
@@ -233,7 +289,7 @@ export default function EmployeesPage() {
         last_name,
         phone,
         role: form.role,
-        email: form.role === "manager" ? form.email.trim() : "",
+        email: form.email.trim(),
         passcode,
       }),
     });
@@ -323,7 +379,57 @@ export default function EmployeesPage() {
       role: employee.role,
       is_active: employee.is_active,
     });
+    const cachedEmail = staffAuthById[employee.id]?.email ?? "";
+    setEditEmail(cachedEmail);
     setEditError("");
+    setEmailActionMessage("");
+    setEmailActionSaving(false);
+    setEmailSaving(false);
+  };
+
+  useEffect(() => {
+    if (!editTarget || !editForm || !isOwnerOrAdmin) return;
+
+    let cancelled = false;
+    const run = async () => {
+      const result = await loadStaffAuth(editTarget.id);
+      if (cancelled) return;
+      if (result.error) {
+        setEditError(result.error);
+        return;
+      }
+      setEditEmail(result.data?.email ?? "");
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [editTarget?.id, editForm?.role, isOwnerOrAdmin]);
+
+  const loadStaffAuth = async (userId: string) => {
+    const response = await fetch(`/api/staff/${userId}/auth`, {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | (StaffAuthPayload & CreateStaffErrorPayload)
+      | null;
+
+    if (!response.ok || !payload) {
+      return {
+        error: formatApiError(payload, "Failed to load staff auth details."),
+      };
+    }
+
+    const normalized = {
+      email: payload.email ?? null,
+      email_confirmed_at: payload.email_confirmed_at ?? null,
+    };
+
+    setStaffAuthById((prev) => ({ ...prev, [userId]: normalized }));
+    return { data: normalized };
   };
 
   const saveEdit = async () => {
@@ -375,6 +481,52 @@ export default function EmployeesPage() {
       }
     }
 
+    if (isOwnerOrAdmin) {
+      const existingEmail = (staffAuthById[editTarget.id]?.email ?? "")
+        .trim()
+        .toLowerCase();
+      const nextEmail = editEmail.trim().toLowerCase();
+
+      if (nextEmail !== existingEmail) {
+        if (editForm.role !== "worker" && nextEmail && isInternalEmail(nextEmail)) {
+          setEditError("Use a real email address, not the internal placeholder domain.");
+          setEditSaving(false);
+          return;
+        }
+
+        setEmailSaving(true);
+        const emailResponse = await fetch(`/api/staff/${editTarget.id}/email`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: nextEmail }),
+        });
+
+        const emailPayload = (await emailResponse.json().catch(() => null)) as
+          | (CreateStaffErrorPayload & StaffAuthPayload & { message?: string })
+          | null;
+
+        if (!emailResponse.ok) {
+          setEditError(formatApiError(emailPayload, "Failed to update staff email."));
+          setEmailSaving(false);
+          setEditSaving(false);
+          return;
+        }
+
+        setStaffAuthById((prev) => ({
+          ...prev,
+          [editTarget.id]: {
+            email: emailPayload?.email ?? nextEmail,
+            email_confirmed_at: emailPayload?.email_confirmed_at ?? null,
+          },
+        }));
+        setEmailActionMessage(
+          emailPayload?.message ?? "Email updated successfully."
+        );
+        setEditEmail(emailPayload?.email ?? nextEmail);
+        setEmailSaving(false);
+      }
+    }
+
     if (isOwnerOrAdmin && editForm.is_active !== editTarget.is_active) {
       const activeResponse = await fetch("/api/staff/set-active", {
         method: "POST",
@@ -402,6 +554,41 @@ export default function EmployeesPage() {
     setEditSaving(false);
     setEditTarget(null);
     setEditForm(null);
+  };
+
+  const sendEmailReset = async () => {
+    if (!editTarget || !editForm) return;
+
+    const targetEmail = editEmail.trim().toLowerCase();
+    if (!targetEmail || isInternalEmail(targetEmail)) {
+      setEditError("Set a real email before sending password reset.");
+      return;
+    }
+
+    setEmailActionSaving(true);
+    setEmailActionMessage("");
+    setEditError("");
+
+    const response = await fetch(`/api/staff/${editTarget.id}/send-reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: targetEmail }),
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | (CreateStaffErrorPayload & { message?: string })
+      | null;
+
+    if (!response.ok) {
+      setEditError(formatApiError(payload, "Failed to send reset email."));
+      setEmailActionSaving(false);
+      return;
+    }
+
+    setEmailActionMessage(
+      payload?.message ?? "If the email exists, a reset link was sent."
+    );
+    setEmailActionSaving(false);
   };
 
   const openDeleteModal = (employee: Profile) => {
@@ -621,6 +808,8 @@ export default function EmployeesPage() {
             !isProtectedAdmin &&
             emp.role !== "admin" &&
             profile?.id !== emp.id;
+          const staffEmail = staffAuthById[emp.id]?.email ?? null;
+          const visibleEmail = isRealEmail(staffEmail) ? staffEmail : "-";
 
           return (
             <div
@@ -628,8 +817,8 @@ export default function EmployeesPage() {
               className="bg-card rounded-xl border border-border px-3 py-2.5 animate-fade-in hover:border-border-light transition-all"
               style={{ animationDelay: `${i * 0.03}s` }}
             >
-              <div className="flex justify-between items-center gap-2.5">
-                <div className="flex gap-3 items-center min-w-0">
+              <div className="flex justify-between items-start gap-2.5">
+                <div className="flex gap-3 items-start min-w-0">
                   <div
                     className={`w-9 h-9 rounded-lg flex items-center justify-center border ${
                       isActive
@@ -642,29 +831,34 @@ export default function EmployeesPage() {
                       className={isActive ? "text-green" : "text-text-muted"}
                     />
                   </div>
-                  <div className="min-w-0 flex items-center gap-1.5 flex-wrap">
-                    <p className="text-[14px] font-bold leading-tight truncate max-w-[180px]">
-                      {emp.first_name} {emp.last_name}
-                    </p>
-                    <p className="text-[11px] text-text-muted leading-tight truncate">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="text-[14px] font-bold leading-tight truncate max-w-[180px]">
+                        {emp.first_name} {emp.last_name}
+                      </p>
+                      <span
+                        className={`inline-flex px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-widest border ${
+                          emp.role === "manager"
+                            ? "bg-accent/10 text-accent border-accent/25"
+                            : emp.role === "admin"
+                              ? "bg-red/10 text-red border-red-border"
+                              : "bg-bg text-text-muted border-border"
+                        }`}
+                      >
+                        {emp.role}
+                      </span>
+                      {!emp.is_active && (
+                        <span className="inline-flex px-1.5 py-0.5 rounded-md text-[9px] text-red font-bold uppercase tracking-widest border border-red-border bg-red-dark">
+                          inactive
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-text-muted leading-tight truncate max-w-[240px] mt-0.5">
                       {emp.phone}
                     </p>
-                    <span
-                      className={`inline-flex px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-widest border ${
-                        emp.role === "manager"
-                          ? "bg-accent/10 text-accent border-accent/25"
-                          : emp.role === "admin"
-                            ? "bg-red/10 text-red border-red-border"
-                            : "bg-bg text-text-muted border-border"
-                      }`}
-                    >
-                      {emp.role}
-                    </span>
-                    {!emp.is_active && (
-                      <span className="inline-flex px-1.5 py-0.5 rounded-md text-[9px] text-red font-bold uppercase tracking-widest border border-red-border bg-red-dark">
-                        inactive
-                      </span>
-                    )}
+                    <p className="text-[11px] text-text-dim leading-tight truncate max-w-[240px] mt-0.5">
+                      {visibleEmail}
+                    </p>
                   </div>
                 </div>
                 <div className="text-right shrink-0">
@@ -830,6 +1024,51 @@ export default function EmployeesPage() {
               />
               {isOwnerOrAdmin && (
                 <>
+                  <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
+                    Email (Optional)
+                  </label>
+                  <input
+                    type="email"
+                    className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm mb-1.5 outline-none focus:border-accent"
+                    value={editEmail}
+                    onChange={(event) => setEditEmail(event.target.value)}
+                    placeholder="name@company.com"
+                    disabled={editSaving || emailSaving || emailActionSaving}
+                  />
+                  {isInternalEmail(editEmail) && (
+                    <p className="text-[11px] text-text-muted mb-2">
+                      Internal placeholder email detected.
+                    </p>
+                  )}
+                  {editForm.role === "worker" && !editEmail.trim() && (
+                    <p className="text-[11px] text-text-muted mb-2">
+                      Leave blank to keep an internal placeholder email.
+                    </p>
+                  )}
+                  {!isInternalEmail(editEmail) && editEmail.trim() && (
+                    <p className="text-[11px] text-text-muted mb-2">
+                      {staffAuthById[editTarget.id]?.email_confirmed_at
+                        ? `Confirmed ${new Date(
+                            staffAuthById[editTarget.id]?.email_confirmed_at as string
+                          ).toLocaleString()}`
+                        : "Unconfirmed email"}
+                    </p>
+                  )}
+                  {editForm.role !== "worker" &&
+                    !isInternalEmail(editEmail) &&
+                    editEmail.trim() && (
+                      <button
+                        type="button"
+                        onClick={sendEmailReset}
+                        disabled={emailActionSaving || editSaving || emailSaving}
+                        className="mb-3.5 inline-flex items-center gap-1 px-2.5 py-1.5 border border-border rounded-lg text-[11px] font-semibold text-text-muted hover:bg-bg hover:text-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {emailActionSaving
+                          ? "Sending reset..."
+                          : "Send password reset email"}
+                      </button>
+                    )}
+
                   {ownerUserId === editTarget.id ? (
                     <p className="text-[11px] text-text-muted mb-3.5">
                       Protected owner account must remain admin.
@@ -898,6 +1137,12 @@ export default function EmployeesPage() {
                     </button>
                   </div>
                 </>
+              )}
+
+              {emailActionMessage && (
+                <p className="text-green text-sm font-semibold mb-3 rounded-lg border border-green-border bg-green-dark px-3 py-2">
+                  {emailActionMessage}
+                </p>
               )}
 
               {editError && (
@@ -1073,22 +1318,24 @@ export default function EmployeesPage() {
                 </button>
               </div>
 
-              {form.role === "manager" && (
-                <>
-                  <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
-                    Email (Optional)
-                  </label>
-                  <input
-                    type="email"
-                    className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm mb-3.5 outline-none focus:border-accent"
-                    value={form.email}
-                    onChange={(event) =>
-                      setForm((prev) => ({ ...prev, email: event.target.value }))
-                    }
-                    placeholder="manager@company.com"
-                  />
-                </>
+              <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
+                Email (Optional)
+              </label>
+              <input
+                type="email"
+                className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm mb-1.5 outline-none focus:border-accent"
+                value={form.email}
+                onChange={(event) =>
+                  setForm((prev) => ({ ...prev, email: event.target.value }))
+                }
+                placeholder="name@company.com"
+              />
+              {form.role === "worker" && !form.email.trim() && (
+                <p className="text-[11px] text-text-dim mb-3.5">
+                  Leave blank to use an internal placeholder email.
+                </p>
               )}
+              {form.role !== "worker" && <div className="mb-3.5" />}
               <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
                 Passcode
               </label>

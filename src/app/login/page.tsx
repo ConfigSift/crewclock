@@ -6,6 +6,7 @@ import { HardHat, Eye, EyeOff, KeyRound } from "lucide-react";
 import { signIn } from "@/lib/actions";
 import { isValidPasscode } from "@/lib/staff-utils";
 import ThemeToggle from "@/components/ThemeToggle";
+import { createClient } from "@/lib/supabase/client";
 
 type LoginMode = "admin" | "employee";
 
@@ -28,10 +29,16 @@ function formatApiError(
 
 export default function LoginPage() {
   const router = useRouter();
+  const supabase = createClient();
   const [mode, setMode] = useState<LoginMode>("admin");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetError, setResetError] = useState("");
+  const [resetSuccess, setResetSuccess] = useState("");
 
   const [adminForm, setAdminForm] = useState({ email: "", password: "" });
   const [employeeForm, setEmployeeForm] = useState({ phone: "", passcode: "" });
@@ -110,6 +117,42 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSendReset = async () => {
+    const email = (resetEmail || adminForm.email).trim();
+    if (!email) {
+      setResetError("Email is required.");
+      setResetSuccess("");
+      return;
+    }
+
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
+    if (!appUrl) {
+      setResetError("Missing NEXT_PUBLIC_APP_URL configuration.");
+      setResetSuccess("");
+      return;
+    }
+
+    setResetLoading(true);
+    setResetError("");
+    setResetSuccess("");
+
+    const { error: resetRequestError } = await supabase.auth.resetPasswordForEmail(
+      email,
+      {
+        redirectTo: `${appUrl}/reset-password`,
+      }
+    );
+
+    if (resetRequestError) {
+      setResetError(resetRequestError.message);
+      setResetLoading(false);
+      return;
+    }
+
+    setResetSuccess("Password reset link sent if the email exists.");
+    setResetLoading(false);
   };
 
   return (
@@ -199,6 +242,19 @@ export default function LoginPage() {
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowForgotPassword(true);
+                  setResetEmail(adminForm.email.trim());
+                  setResetError("");
+                  setResetSuccess("");
+                }}
+                className="text-xs font-semibold text-text-muted hover:text-text mb-4"
+              >
+                Forgot password?
+              </button>
             </>
           ) : (
             <>
@@ -266,6 +322,82 @@ export default function LoginPage() {
       <p className="text-center text-xs text-text-dim mt-5">
         Accounts are created internally by your company admin.
       </p>
+
+      {showForgotPassword && (
+        <div
+          className="fixed inset-0 z-[1000] flex items-center justify-center p-5"
+          onClick={() => {
+            if (resetLoading) return;
+            setShowForgotPassword(false);
+          }}
+        >
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <div
+            onClick={(event) => event.stopPropagation()}
+            className="relative bg-card rounded-2xl border border-border w-full max-w-[460px] animate-scale-in"
+          >
+            <div className="flex justify-between items-center px-6 py-4 border-b border-border">
+              <h3 className="text-[17px] font-bold">Reset password</h3>
+              <button
+                onClick={() => setShowForgotPassword(false)}
+                disabled={resetLoading}
+                className="text-text-muted hover:text-text text-sm font-semibold disabled:opacity-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="px-6 py-5">
+              <p className="text-sm text-text-muted mb-3">
+                Enter your email and we'll send a password reset link.
+              </p>
+
+              <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
+                Email
+              </label>
+              <input
+                type="email"
+                className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm font-sans mb-3.5 focus:border-accent outline-none"
+                placeholder="manager@company.com"
+                value={resetEmail}
+                onChange={(event) => setResetEmail(event.target.value)}
+                disabled={resetLoading}
+              />
+
+              {resetError && (
+                <p className="text-red text-sm font-semibold mb-3 rounded-lg border border-red-border bg-red-dark px-3 py-2">
+                  {resetError}
+                </p>
+              )}
+
+              {resetSuccess && (
+                <p className="text-green text-sm font-semibold mb-3 rounded-lg border border-green-border bg-green-dark px-3 py-2">
+                  {resetSuccess}
+                </p>
+              )}
+
+              <div className="flex gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowForgotPassword(false)}
+                  disabled={resetLoading}
+                  className="flex-1 py-3 border border-border rounded-xl text-text-muted text-sm font-semibold hover:bg-bg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSendReset}
+                  disabled={resetLoading}
+                  className="flex-[2] py-3 bg-gradient-to-br from-accent to-accent-dark rounded-xl text-bg text-sm font-extrabold shadow-[0_4px_20px_var(--color-accent-glow)] hover:-translate-y-0.5 transition-all disabled:opacity-50"
+                >
+                  {resetLoading ? "Sending..." : "Send reset link"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
