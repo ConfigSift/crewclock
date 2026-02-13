@@ -30,11 +30,16 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
+  const pathname = request.nextUrl.pathname;
+
+  // API routes handle auth internally.
+  if (pathname.startsWith("/api/")) {
+    return supabaseResponse;
+  }
+
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
-  const pathname = request.nextUrl.pathname;
 
   // Public routes
   if (pathname === "/login" || pathname === "/") {

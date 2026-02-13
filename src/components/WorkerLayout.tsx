@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { HardHat, Clock, BarChart3, LogOut } from "lucide-react";
 import { signOut } from "@/lib/actions";
 import { useInitialData } from "@/hooks/use-data";
+import ThemeToggle from "@/components/ThemeToggle";
 
 export default function WorkerLayout({
   children,
@@ -33,12 +34,15 @@ export default function WorkerLayout({
           <HardHat size={20} className="text-bg" />
           <span className="text-[17px] font-extrabold text-bg">CrewClock</span>
         </div>
-        <button
-          onClick={handleLogout}
-          className="text-bg/80 hover:text-bg transition-colors p-1"
-        >
-          <LogOut size={18} />
-        </button>
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <button
+            onClick={handleLogout}
+            className="text-bg/80 hover:text-bg transition-colors p-1"
+          >
+            <LogOut size={18} />
+          </button>
+        </div>
       </div>
 
       {/* Content */}

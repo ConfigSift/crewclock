@@ -25,9 +25,35 @@
 
   --font-sans: "Outfit", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Courier New", monospace;
+
+  --color-hero-from: #272218;
+  --color-hero-border: #3d3520;
 }
 
 @layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html[data-theme="light"] {
+    color-scheme: light;
+    --color-bg: #f5f2ec;
+    --color-surface: #f0ece5;
+    --color-card: #faf7f2;
+    --color-border: #ded6ca;
+    --color-border-light: #cec4b766;
+    --color-text: #231f19;
+    --color-text-muted: #6a6357;
+    --color-text-dim: #8d8477;
+    --color-accent-glow: rgba(229, 160, 36, 0.25);
+    --color-green-dark: #dff2e4;
+    --color-green-border: #a5d3b1;
+    --color-red-dark: #f9dede;
+    --color-red-border: #eab1b1;
+    --color-hero-from: #f0e4cd;
+    --color-hero-border: #d9c396;
+  }
+
   body {
     @apply bg-bg text-text font-sans antialiased;
   }

@@ -5,7 +5,6 @@ import type {
   ClockInResponse,
   ClockOutResponse,
   Project,
-  UserRole,
 } from "@/types/database";
 
 type SupabaseError = {
@@ -18,7 +17,6 @@ function formatSupabaseError(error: SupabaseError): string {
   return details ? `${error.message} (${details})` : error.message;
 }
 
-// ─── Clock In ────────────────────────────────────────
 export async function clockIn(
   projectId: string,
   lat: number,
@@ -39,7 +37,6 @@ export async function clockIn(
   return data as ClockInResponse;
 }
 
-// ─── Clock Out ───────────────────────────────────────
 export async function clockOut(
   lat?: number,
   lng?: number
@@ -58,7 +55,6 @@ export async function clockOut(
   return data as ClockOutResponse;
 }
 
-// ─── Project CRUD ────────────────────────────────────
 export async function createProject(
   data: Omit<Project, "id" | "created_at" | "updated_at" | "created_by">
 ): Promise<{ project?: Project; error?: string }> {
@@ -81,7 +77,9 @@ export async function createProject(
 
 export async function updateProject(
   id: string,
-  data: Partial<Pick<Project, "name" | "address" | "lat" | "lng" | "geo_radius_m" | "status">>
+  data: Partial<
+    Pick<Project, "name" | "address" | "lat" | "lng" | "geo_radius_m" | "status">
+  >
 ): Promise<{ project?: Project; error?: string }> {
   const supabase = createClient();
 
@@ -96,45 +94,11 @@ export async function updateProject(
   return { project: project as Project };
 }
 
-export async function deleteProject(
-  id: string
-): Promise<{ error?: string }> {
+export async function deleteProject(id: string): Promise<{ error?: string }> {
   const supabase = createClient();
   const { error } = await supabase.from("projects").delete().eq("id", id);
   if (error) return { error: error.message };
   return {};
-}
-
-// ─── Auth ────────────────────────────────────────────
-export async function signUp(
-  email: string,
-  password: string,
-  metadata: {
-    company_name: string;
-    first_name: string;
-    last_name: string;
-    phone: string;
-    role: UserRole;
-  }
-) {
-  const supabase = createClient();
-
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: {
-        company_name: metadata.company_name,
-        first_name: metadata.first_name,
-        last_name: metadata.last_name,
-        phone: metadata.phone,
-        role: metadata.role,
-      },
-    },
-  });
-
-  if (error) return { error: formatSupabaseError(error) };
-  return { user: data.user, session: data.session };
 }
 
 export async function signIn(email: string, password: string) {

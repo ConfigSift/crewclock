@@ -156,7 +156,7 @@ export default function ClockPage() {
           </div>
 
           {/* Timer */}
-          <div className="bg-gradient-to-br from-[#272218] to-card rounded-2xl border border-[#3d3520] p-8 text-center mb-4">
+          <div className="bg-gradient-to-br from-[var(--color-hero-from)] to-card rounded-2xl border border-[var(--color-hero-border)] p-8 text-center mb-4">
             <div className="text-[52px] font-extrabold font-mono text-accent leading-none tracking-tight shadow-[0_0_50px_var(--color-accent-glow)]">
               {formatDuration(elapsed)}
             </div>

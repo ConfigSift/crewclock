@@ -2,103 +2,105 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { HardHat, Eye, EyeOff } from "lucide-react";
-import { signUp, signIn } from "@/lib/actions";
+import { HardHat, Eye, EyeOff, KeyRound } from "lucide-react";
+import { signIn } from "@/lib/actions";
+import { isValidPasscode } from "@/lib/staff-utils";
+import ThemeToggle from "@/components/ThemeToggle";
+
+type LoginMode = "admin" | "employee";
+
+function formatApiError(
+  payload: {
+    error?: string;
+    code?: string | null;
+    details?: string | null;
+    hint?: string | null;
+  } | null,
+  fallback: string
+): string {
+  if (!payload) return fallback;
+  const parts = [payload.error || fallback];
+  if (payload.code) parts.push(`Code: ${payload.code}`);
+  if (payload.details) parts.push(`Details: ${payload.details}`);
+  if (payload.hint) parts.push(`Hint: ${payload.hint}`);
+  return parts.join(" ");
+}
 
 export default function LoginPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [mode, setMode] = useState<LoginMode>("admin");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
-  const [form, setForm] = useState({
-    email: "",
-    password: "",
-    company: "",
-    firstName: "",
-    lastName: "",
-    phone: "",
-  });
-  const [isManager, setIsManager] = useState(false);
+  const [adminForm, setAdminForm] = useState({ email: "", password: "" });
+  const [employeeForm, setEmployeeForm] = useState({ phone: "", passcode: "" });
 
-  const update = (field: string, value: string) =>
-    setForm((f) => ({ ...f, [field]: value }));
+  const handleAdminSignIn = async (): Promise<boolean> => {
+    const email = adminForm.email.trim();
+    const password = adminForm.password;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+    if (!email || !password) {
+      setError("Email and password are required.");
+      return false;
+    }
+
+    const result = await signIn(email, password);
+    if (result.error) {
+      setError(result.error);
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleEmployeeSignIn = async (): Promise<boolean> => {
+    const phone = employeeForm.phone.trim();
+    const passcode = employeeForm.passcode.trim();
+
+    if (!phone || !isValidPasscode(passcode)) {
+      setError("Phone number and a 6-digit passcode are required.");
+      return false;
+    }
+
+    const response = await fetch("/api/auth/employee-login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone, passcode }),
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          error?: string;
+          code?: string | null;
+          details?: string | null;
+          hint?: string | null;
+        }
+      | null;
+
+    if (!response.ok) {
+      setError(formatApiError(payload, "Login failed."));
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setError("");
-    setMessage("");
     setLoading(true);
 
     try {
-      if (mode === "signup") {
-        const companyName = form.company.trim();
-        const firstName = form.firstName.trim();
-        const lastName = form.lastName.trim();
-        const phone = form.phone.trim();
-        const email = form.email.trim();
-        const password = form.password;
+      const success =
+        mode === "admin"
+          ? await handleAdminSignIn()
+          : await handleEmployeeSignIn();
 
-        if (
-          !companyName ||
-          !firstName ||
-          !lastName ||
-          !phone ||
-          !email ||
-          !password
-        ) {
-          setError(
-            "Please fill in Company Name, First Name, Last Name, Phone Number, Email, and Password."
-          );
-          setLoading(false);
-          return;
-        }
-
-        const result = await signUp(email, password, {
-          company_name: companyName,
-          first_name: firstName,
-          last_name: lastName,
-          phone,
-          role: isManager ? "manager" : "worker",
-        });
-        if (result.error) {
-          setError(result.error);
-          setLoading(false);
-          return;
-        }
-
-        if (result.session) {
-          router.push("/");
-          router.refresh();
-          return;
-        }
-
-        if (result.user) {
-          const confirmationMessage =
-            "Account created. Check your email to confirm your account.";
-          console.info(confirmationMessage);
-          setMessage(confirmationMessage);
-          setMode("signin");
-          setLoading(false);
-          return;
-        }
-
-        setError("Signup completed but no session was returned.");
-        setLoading(false);
-        return;
-      } else {
-        const result = await signIn(form.email, form.password);
-        if (result.error) {
-          setError(result.error);
-          setLoading(false);
-          return;
-        }
+      if (success) {
+        router.push("/");
+        router.refresh();
       }
-
-      router.push("/");
-      router.refresh();
     } catch (err: unknown) {
       if (err instanceof Error) {
         setError(err.message);
@@ -112,63 +114,94 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex flex-col justify-center px-6 max-w-[440px] mx-auto">
-      {/* Logo */}
+      <div className="flex justify-end mb-3">
+        <ThemeToggle />
+      </div>
+
       <div className="text-center mb-10">
         <div className="inline-flex items-center justify-center w-[68px] h-[68px] bg-gradient-to-br from-accent to-accent-dark rounded-2xl mb-4 shadow-[0_8px_40px_var(--color-accent-glow)]">
           <HardHat size={34} className="text-bg" />
         </div>
-        <h1 className="text-[32px] font-black tracking-tight text-text">
-          CrewClock
-        </h1>
-        <p className="text-sm text-text-muted mt-1 font-medium">
-          Construction Time Management
-        </p>
+        <h1 className="text-[32px] font-black tracking-tight text-text">CrewClock</h1>
+        <p className="text-sm text-text-muted mt-1 font-medium">Construction Time Management</p>
       </div>
 
-      {/* Form Card */}
       <div className="bg-card rounded-2xl border border-border p-6">
+        <div className="flex gap-1 bg-bg p-1 rounded-xl mb-5">
+          <button
+            type="button"
+            onClick={() => {
+              setMode("admin");
+              setError("");
+            }}
+            className={`flex-1 py-2 rounded-lg text-[13px] font-semibold transition-all ${
+              mode === "admin" ? "bg-card text-accent" : "text-text-muted"
+            }`}
+          >
+            Admin / Manager
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMode("employee");
+              setError("");
+            }}
+            className={`flex-1 py-2 rounded-lg text-[13px] font-semibold transition-all ${
+              mode === "employee" ? "bg-card text-accent" : "text-text-muted"
+            }`}
+          >
+            Employee
+          </button>
+        </div>
+
         <form onSubmit={handleSubmit}>
-          {mode === "signup" && (
+          {mode === "admin" ? (
             <>
+              <div className="mb-3 rounded-lg border border-border bg-bg px-3 py-2">
+                <p className="text-[11px] font-semibold text-text-muted">
+                  Admin reminder: employees are created internally from Crew management.
+                </p>
+              </div>
+
               <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
-                Company Name
+                Email
               </label>
               <input
-                type="text"
-                className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm font-sans mb-3.5 focus:border-accent focus:ring-2 focus:ring-accent-glow outline-none"
-                placeholder="e.g. BuildRight Inc"
-                value={form.company}
-                onChange={(e) => update("company", e.target.value)}
+                type="email"
+                className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm font-sans mb-3.5 focus:border-accent outline-none"
+                placeholder="manager@company.com"
+                value={adminForm.email}
+                onChange={(event) =>
+                  setAdminForm((prev) => ({ ...prev, email: event.target.value }))
+                }
+                required
               />
 
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
-                    First Name
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm font-sans focus:border-accent outline-none"
-                    placeholder="John"
-                    value={form.firstName}
-                    onChange={(e) => update("firstName", e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
-                    Last Name
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm font-sans focus:border-accent outline-none"
-                    placeholder="Doe"
-                    value={form.lastName}
-                    onChange={(e) => update("lastName", e.target.value)}
-                  />
-                </div>
+              <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
+                Password
+              </label>
+              <div className="relative mb-4">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  className="w-full p-3 pr-10 bg-bg border border-border rounded-lg text-text text-sm font-sans focus:border-accent outline-none"
+                  placeholder="Password"
+                  value={adminForm.password}
+                  onChange={(event) =>
+                    setAdminForm((prev) => ({ ...prev, password: event.target.value }))
+                  }
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-text-dim hover:text-text-muted transition-colors"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
-              <div className="h-3.5" />
-
+            </>
+          ) : (
+            <>
               <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
                 Phone Number
               </label>
@@ -176,77 +209,48 @@ export default function LoginPage() {
                 type="tel"
                 className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm font-sans mb-3.5 focus:border-accent outline-none"
                 placeholder="(555) 123-4567"
-                value={form.phone}
-                onChange={(e) => update("phone", e.target.value)}
+                value={employeeForm.phone}
+                onChange={(event) =>
+                  setEmployeeForm((prev) => ({ ...prev, phone: event.target.value }))
+                }
+                required
               />
+
+              <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
+                6-Digit Passcode
+              </label>
+              <div className="relative mb-4">
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  className="w-full p-3 pr-10 bg-bg border border-border rounded-lg text-text text-sm font-mono tracking-[0.3em] focus:border-accent outline-none"
+                  placeholder="000000"
+                  value={employeeForm.passcode}
+                  onChange={(event) =>
+                    setEmployeeForm((prev) => ({
+                      ...prev,
+                      passcode: event.target.value.replace(/\D/g, "").slice(0, 6),
+                    }))
+                  }
+                  required
+                />
+                <KeyRound
+                  size={16}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-text-dim"
+                />
+              </div>
+              <p className="text-xs text-text-muted mb-4">
+                Forgot passcode? Ask your manager.
+              </p>
             </>
           )}
 
-          <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
-            Email
-          </label>
-          <input
-            type="email"
-            className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm font-sans mb-3.5 focus:border-accent outline-none"
-            placeholder="john@buildright.com"
-            value={form.email}
-            onChange={(e) => update("email", e.target.value)}
-            required
-          />
-
-          <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
-            Password
-          </label>
-          <div className="relative mb-4">
-            <input
-              type={showPassword ? "text" : "password"}
-              className="w-full p-3 pr-10 bg-bg border border-border rounded-lg text-text text-sm font-sans focus:border-accent outline-none"
-              placeholder="••••••••"
-              value={form.password}
-              onChange={(e) => update("password", e.target.value)}
-              required
-              minLength={6}
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-dim hover:text-text-muted transition-colors"
-            >
-              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-            </button>
-          </div>
-
-          {mode === "signup" && (
-            <div
-              className="flex items-center gap-2.5 mb-5 cursor-pointer select-none"
-              onClick={() => setIsManager(!isManager)}
-            >
-              <div
-                className={`w-[46px] h-[26px] rounded-full p-[3px] flex items-center transition-colors ${
-                  isManager ? "bg-accent" : "bg-border"
-                }`}
-              >
-                <div
-                  className={`w-5 h-5 rounded-full bg-white shadow-md transition-transform ${
-                    isManager ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
-              </div>
-              <span
-                className={`text-sm font-semibold ${
-                  isManager ? "text-accent" : "text-text-muted"
-                }`}
-              >
-                I&apos;m a Manager / Foreman
-              </span>
-            </div>
-          )}
-
           {error && (
-            <p className="text-red text-sm font-semibold mb-3">{error}</p>
-          )}
-          {message && (
-            <p className="text-green-600 text-sm font-semibold mb-3">{message}</p>
+            <p className="text-red text-sm font-semibold mb-3 rounded-lg border border-red-border bg-red-dark px-3 py-2">
+              {error}
+            </p>
           )}
 
           <button
@@ -254,32 +258,13 @@ export default function LoginPage() {
             disabled={loading}
             className="w-full p-3.5 bg-gradient-to-br from-accent to-accent-dark rounded-xl text-bg text-[15px] font-extrabold cursor-pointer shadow-[0_4px_20px_var(--color-accent-glow)] hover:shadow-[0_6px_28px_var(--color-accent-glow)] hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading
-              ? "Please wait..."
-              : mode === "signin"
-                ? "Sign In"
-                : "Create Account"}
+            {loading ? "Please wait..." : "Sign In"}
           </button>
         </form>
-
-        <div className="mt-4 text-center">
-          <button
-            onClick={() => {
-              setMode(mode === "signin" ? "signup" : "signin");
-              setError("");
-              setMessage("");
-            }}
-            className="text-sm text-text-muted hover:text-accent transition-colors font-medium"
-          >
-            {mode === "signin"
-              ? "New here? Create an account"
-              : "Already have an account? Sign in"}
-          </button>
-        </div>
       </div>
 
       <p className="text-center text-xs text-text-dim mt-5">
-        Your session stays active until you sign out
+        Accounts are created internally by your company admin.
       </p>
     </div>
   );

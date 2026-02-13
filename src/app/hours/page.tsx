@@ -60,7 +60,7 @@ export default function HoursPage() {
         </div>
 
         {/* Total Hours */}
-        <div className="bg-gradient-to-br from-[#272218] to-card rounded-2xl border border-[#3d3520] p-7 text-center mb-4">
+        <div className="bg-gradient-to-br from-[var(--color-hero-from)] to-card rounded-2xl border border-[var(--color-hero-border)] p-7 text-center mb-4">
           <p className="text-[48px] font-extrabold text-accent tracking-tight leading-none">
             {formatHours(totalSec)}
           </p>
