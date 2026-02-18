@@ -181,7 +181,7 @@ export default function LoginPage() {
               mode === "admin" ? "bg-card text-accent" : "text-text-muted"
             }`}
           >
-            Admin / Manager
+            Manager
           </button>
           <button
             type="button"
@@ -200,12 +200,6 @@ export default function LoginPage() {
         <form onSubmit={handleSubmit}>
           {mode === "admin" ? (
             <>
-              <div className="mb-3 rounded-lg border border-border bg-bg px-3 py-2">
-                <p className="text-[11px] font-semibold text-text-muted">
-                  Admin reminder: employees are created internally from Crew management.
-                </p>
-              </div>
-
               <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
                 Email
               </label>
@@ -318,10 +312,6 @@ export default function LoginPage() {
           </button>
         </form>
       </div>
-
-      <p className="text-center text-xs text-text-dim mt-5">
-        Accounts are created internally by your company admin.
-      </p>
 
       {showForgotPassword && (
         <div
