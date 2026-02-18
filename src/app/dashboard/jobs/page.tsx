@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Plus,
   Pencil,
@@ -26,6 +26,7 @@ import {
   isInPeriod,
   type Period,
 } from "@/lib/utils";
+import { loadGooglePlaces } from "@/lib/google-places";
 import type { Project } from "@/types/database";
 
 // ─── Modal Wrapper ───────────────────────────────────
@@ -89,6 +90,9 @@ function JobForm({
   const [geoLoading, setGeoLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
+  const addressRef = useRef<HTMLInputElement | null>(null);
+  const [placesReady, setPlacesReady] = useState(false);
+  const [placesError, setPlacesError] = useState<string | null>(null);
 
   useEffect(() => {
     if (job) {
@@ -101,6 +105,65 @@ function JobForm({
       });
     }
   }, [job]);
+
+  useEffect(() => {
+    let mounted = true;
+    let placeListener: { remove: () => void } | null = null;
+
+    const initPlacesAutocomplete = async () => {
+      try {
+        await loadGooglePlaces();
+        if (!mounted || !addressRef.current) return;
+
+        const googleMaps = (window as Window & { google?: any }).google;
+        if (!googleMaps?.maps?.places?.Autocomplete) {
+          setPlacesReady(false);
+          setPlacesError("Address suggestions unavailable  enter address manually.");
+          return;
+        }
+
+        const autocomplete = new googleMaps.maps.places.Autocomplete(
+          addressRef.current,
+          {
+            fields: ["formatted_address", "geometry"],
+            types: ["address"],
+          }
+        );
+
+        placeListener = autocomplete.addListener("place_changed", () => {
+          const place = autocomplete.getPlace();
+          if (place.geometry?.location) {
+            const lat = place.geometry.location.lat();
+            const lng = place.geometry.location.lng();
+            setForm((f) => ({
+              ...f,
+              address: place.formatted_address ?? f.address,
+              lat: lat.toFixed(6),
+              lng: lng.toFixed(6),
+            }));
+            setPlacesError(null);
+            return;
+          }
+
+          setPlacesError("Selected address has no coordinates");
+        });
+
+        setPlacesReady(true);
+        setPlacesError(null);
+      } catch {
+        if (!mounted) return;
+        setPlacesReady(false);
+        setPlacesError("Address suggestions unavailable  enter address manually.");
+      }
+    };
+
+    initPlacesAutocomplete();
+
+    return () => {
+      mounted = false;
+      placeListener?.remove();
+    };
+  }, []);
 
   const handleUseLocation = () => {
     if (!navigator.geolocation) {
@@ -200,11 +263,19 @@ function JobForm({
         Job Site Address *
       </label>
       <input
+        ref={addressRef}
         className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm mb-4 outline-none focus:border-accent"
         placeholder="1420 Highland Ave, Denver CO"
         value={form.address}
         onChange={(e) => setForm({ ...form, address: e.target.value })}
       />
+      {placesError && (
+        <p
+          className={`text-[11px] mb-4 ${placesReady ? "text-red" : "text-text-dim"}`}
+        >
+          {placesError}
+        </p>
+      )}
 
       <div className="flex justify-between items-center mb-2">
         <label className="text-[11px] font-bold text-text-muted uppercase tracking-widest">
@@ -616,3 +687,4 @@ export default function JobsPage() {
     </div>
   );
 }
+
