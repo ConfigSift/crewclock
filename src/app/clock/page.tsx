@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   MapPin,
   Building2,
@@ -11,8 +11,21 @@ import {
 import WorkerLayout from "@/components/WorkerLayout";
 import { useAppStore } from "@/lib/store";
 import { clockIn, clockOut } from "@/lib/actions";
-import { checkProximity, type GeoStatus } from "@/lib/geo";
+import {
+  getCurrentPosition,
+  haversineDistanceMeters,
+  type GeoStatus,
+  type LatLng,
+} from "@/lib/geo";
 import { formatDuration, formatTime, formatDate, formatHours } from "@/lib/utils";
+
+type AutoSiteStatus =
+  | "idle"
+  | "locating"
+  | "selected"
+  | "multiple"
+  | "none"
+  | "unavailable";
 
 function LiveDot() {
   return (
@@ -30,15 +43,21 @@ export default function ClockPage() {
     addTimeEntry,
   } = useAppStore();
 
+  const activeProjects = projects.filter((p) => p.status === "active");
+
   const [selectedProject, setSelectedProject] = useState("");
   const [geoStatus, setGeoStatus] = useState<GeoStatus>("idle");
   const [distance, setDistance] = useState<number | null>(null);
-  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
-    null
-  );
+  const [coords, setCoords] = useState<LatLng | null>(null);
+  const [locationDenied, setLocationDenied] = useState(false);
+  const [autoSiteStatus, setAutoSiteStatus] = useState<AutoSiteStatus>("idle");
+  const [autoSiteProjectName, setAutoSiteProjectName] = useState("");
+  const [autoSiteDistance, setAutoSiteDistance] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const initialGeoRequestedRef = useRef(false);
 
   // Live timer
   useEffect(() => {
@@ -46,30 +65,125 @@ export default function ClockPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Geo-check when project selected
-  const runGeoCheck = useCallback(async () => {
+  const getEligibleProjects = useCallback(
+    (point: LatLng) => {
+      return activeProjects
+        .map((project) => {
+          const distanceMeters = Math.round(
+            haversineDistanceMeters(point.lat, point.lng, project.lat, project.lng)
+          );
+          const radius = project.geo_radius_m || 300;
+          return {
+            project,
+            distanceMeters,
+            radius,
+          };
+        })
+        .filter((candidate) => candidate.distanceMeters <= candidate.radius)
+        .sort((a, b) => a.distanceMeters - b.distanceMeters);
+    },
+    [activeProjects]
+  );
+
+  const applyAutoSelection = useCallback(
+    (point: LatLng) => {
+      const eligible = getEligibleProjects(point);
+
+      if (eligible.length === 0) {
+        setSelectedProject("");
+        setGeoStatus("idle");
+        setDistance(null);
+        setAutoSiteStatus("none");
+        return;
+      }
+
+      const closest = eligible[0];
+      setSelectedProject(closest.project.id);
+      setGeoStatus("on_site");
+      setDistance(closest.distanceMeters);
+      setAutoSiteProjectName(closest.project.name);
+      setAutoSiteDistance(closest.distanceMeters);
+      setAutoSiteStatus(eligible.length === 1 ? "selected" : "multiple");
+    },
+    [getEligibleProjects]
+  );
+
+  const runAutoProjectDetection = useCallback(async () => {
+    setAutoSiteStatus("locating");
+    setAutoSiteProjectName("");
+    setAutoSiteDistance(null);
+    setGeoStatus("checking");
+    setDistance(null);
+
+    try {
+      const pos = await getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 30000,
+      });
+
+      const nextCoords = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+      };
+      setCoords(nextCoords);
+      setLocationDenied(false);
+      applyAutoSelection(nextCoords);
+    } catch (err: unknown) {
+      setCoords(null);
+      setDistance(null);
+      const geoErr = err as GeolocationPositionError;
+      const denied = geoErr?.code === 1;
+      setLocationDenied(denied);
+      setGeoStatus(denied ? "denied" : "error");
+      setAutoSiteStatus("unavailable");
+    }
+  }, [applyAutoSelection]);
+
+  // One location request on initial mount.
+  useEffect(() => {
+    if (initialGeoRequestedRef.current) return;
+    initialGeoRequestedRef.current = true;
+    runAutoProjectDetection();
+  }, [runAutoProjectDetection]);
+
+  // If projects load after initial location lookup, auto-select using cached coords.
+  useEffect(() => {
+    if (!coords || selectedProject) return;
+    if (autoSiteStatus !== "none") return;
+    applyAutoSelection(coords);
+  }, [coords, selectedProject, autoSiteStatus, applyAutoSelection]);
+
+  // Recompute on-site status for the selected project from the latest known coords.
+  useEffect(() => {
     if (!selectedProject) {
       setGeoStatus("idle");
       setDistance(null);
       return;
     }
-    const project = projects.find((p) => p.id === selectedProject);
-    if (!project) return;
 
-    setGeoStatus("checking");
-    const result = await checkProximity(
-      project.lat,
-      project.lng,
-      project.geo_radius_m || 300
+    const project = activeProjects.find((p) => p.id === selectedProject);
+    if (!project) {
+      setGeoStatus("error");
+      setDistance(null);
+      return;
+    }
+
+    if (!coords) {
+      setGeoStatus(locationDenied ? "denied" : "error");
+      setDistance(null);
+      return;
+    }
+
+    const distanceMeters = Math.round(
+      haversineDistanceMeters(coords.lat, coords.lng, project.lat, project.lng)
     );
-    setGeoStatus(result.status);
-    setDistance(result.distance);
-    setCoords(result.coords);
-  }, [selectedProject, projects]);
 
-  useEffect(() => {
-    runGeoCheck();
-  }, [runGeoCheck]);
+    setDistance(distanceMeters);
+    setGeoStatus(
+      distanceMeters <= (project.geo_radius_m || 300) ? "on_site" : "too_far"
+    );
+  }, [selectedProject, activeProjects, coords, locationDenied]);
 
   // Clock in
   const handleClockIn = async () => {
@@ -118,7 +232,7 @@ export default function ClockPage() {
       outLat = pos.coords.latitude;
       outLng = pos.coords.longitude;
     } catch {
-      // Fine — clock-out location is optional
+      // Fine - clock-out location is optional
     }
 
     const result = await clockOut(outLat, outLng);
@@ -140,7 +254,7 @@ export default function ClockPage() {
     ? now - new Date(activeEntry.clock_in).getTime()
     : 0;
 
-  // ─── CLOCKED IN VIEW ──────────────────────────────
+  // CLOCKED IN VIEW
   if (activeEntry && activeProject) {
     return (
       <WorkerLayout>
@@ -201,9 +315,9 @@ export default function ClockPage() {
     );
   }
 
-  // ─── CLOCK IN VIEW ────────────────────────────────
+  // CLOCK IN VIEW
   const canClockIn = selectedProject && geoStatus === "on_site";
-  const selProject = projects.find((p) => p.id === selectedProject);
+  const selProject = activeProjects.find((p) => p.id === selectedProject);
   const recentEntries = timeEntries.filter(
     (e) => e.employee_id === profile?.id && e.clock_out
   );
@@ -235,17 +349,77 @@ export default function ClockPage() {
               backgroundPosition: "right 14px center",
             }}
             value={selectedProject}
-            onChange={(e) => setSelectedProject(e.target.value)}
+            onChange={(e) => {
+              setSelectedProject(e.target.value);
+              if (autoSiteStatus === "selected" || autoSiteStatus === "multiple") {
+                setAutoSiteStatus("idle");
+              }
+            }}
           >
             <option value="">Choose a project...</option>
-            {projects
-              .filter((p) => p.status === "active")
-              .map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
+            {activeProjects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
           </select>
+
+          <div className="mt-2">
+            {autoSiteStatus === "locating" && (
+              <p className="text-[12px] text-text-dim">Detecting your location...</p>
+            )}
+
+            {autoSiteStatus === "selected" && autoSiteDistance !== null && (
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[12px] text-green font-semibold">
+                  Auto-selected: {autoSiteProjectName} ({autoSiteDistance}m away)
+                </p>
+                <button
+                  type="button"
+                  onClick={runAutoProjectDetection}
+                  className="text-[12px] text-accent font-semibold hover:underline"
+                >
+                  Re-check
+                </button>
+              </div>
+            )}
+
+            {autoSiteStatus === "multiple" && autoSiteDistance !== null && (
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[12px] text-accent font-semibold">
+                  Closest selected: {autoSiteProjectName} ({autoSiteDistance}m). Multiple sites nearby. Change if needed.
+                </p>
+                <button
+                  type="button"
+                  onClick={runAutoProjectDetection}
+                  className="text-[12px] text-accent font-semibold hover:underline"
+                >
+                  Re-check
+                </button>
+              </div>
+            )}
+
+            {autoSiteStatus === "none" && (
+              <p className="text-[12px] text-text-dim">
+                Not within range of any job site. Select manually.
+              </p>
+            )}
+
+            {autoSiteStatus === "unavailable" && (
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[12px] text-text-dim">
+                  Location unavailable - select a project manually.
+                </p>
+                <button
+                  type="button"
+                  onClick={runAutoProjectDetection}
+                  className="text-[12px] text-accent font-semibold hover:underline"
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Project details + geo status */}
           {selProject && (
