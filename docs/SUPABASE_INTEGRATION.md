@@ -1,0 +1,107 @@
+# Supabase Integration Inventory
+
+## Supabase Client Configuration
+
+- Browser client helper: `src/lib/supabase/client.ts`
+  - Uses `createBrowserClient` with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+- Server client helper: `src/lib/supabase/server.ts`
+  - Uses `createServerClient` and `next/headers` cookies bridging for SSR and route handlers.
+- Middleware session client: `src/lib/supabase/middleware.ts`
+  - Uses `createServerClient` with request/response cookie syncing for session refresh and route guards.
+- Admin/service-role client: `src/lib/supabase/admin.ts`
+  - Uses `createClient` from `@supabase/supabase-js` with `SUPABASE_SERVICE_ROLE_KEY`.
+  - Disables auth auto refresh/persist for server-only usage.
+
+## SQL And Migration Inventory
+
+### Migration Files
+
+- `supabase/migrations/001_initial_schema.sql`
+  - Creates core tables (`companies`, `profiles`, `projects`, `time_entries`), view `v_active_sessions`, helper functions, core clock RPCs, and RLS policies.
+- `supabase/migrations/002_handle_new_user_company_upsert.sql`
+  - Replaces `handle_new_user()` to upsert company by slug safely and tolerate metadata key variants.
+- `supabase/migrations/003_staff_credentials_internal_auth.sql`
+  - Adds `staff_credentials` table, RLS policies, and passcode RPCs (`set_staff_passcode`, `verify_staff_passcode`) plus trigger setup.
+- `supabase/migrations/004_harden_handle_new_user_for_admin_create.sql`
+  - Hardens `handle_new_user()` for admin-created users and reinstalls `on_auth_user_created` trigger.
+- `supabase/migrations/004_staff_auth_hardening.sql`
+  - Adds/updates `normalize_phone()` and hardens passcode set/verify functions.
+- `supabase/migrations/005_staff_editing_and_admin_protection.sql`
+  - Introduces owner/admin protection model, profile update policy/trigger, and RPCs for staff profile/role/status/passcode management.
+- `supabase/migrations/006_admin_owner_and_staff_deletion.sql`
+  - Adds owner/admin promotion and ownership assignment logic, plus `delete_staff` and updated staff-management RPCs.
+- `supabase/migrations/006_enable_role_changes.sql`
+  - Enables secure role changes and owner initialization with updated `handle_new_user`, `can_edit_profile`, `update_staff_role`.
+- `supabase/migrations/007_fix_update_staff_role_and_active_rpc.sql`
+  - Normalizes API-expected RPC signatures: `update_staff_role(p_user_id, p_role)` and `set_staff_active(p_user_id, p_is_active)`.
+
+### Additional SQL In Repo Root
+
+- `001_initial_schema.sql`
+  - Standalone patch script that replaces `public.handle_new_user()` with safe company upsert and role parsing.
+
+## RPC Functions Referenced In App Code (`.rpc(...)`)
+
+- `clock_in`
+  - Used in `src/lib/actions.ts`.
+- `clock_out`
+  - Used in `src/lib/actions.ts`.
+- `verify_staff_passcode`
+  - Used in `src/app/api/auth/employee-login/route.ts`.
+- `set_staff_passcode`
+  - Used in `src/app/api/staff/route.ts` and `src/app/api/staff/reset-passcode/route.ts`.
+  - Also present in backup route `src/app/api/staff/route.ts.bak`.
+- `update_staff_profile`
+  - Used in `src/app/api/staff/update-profile/route.ts`.
+- `update_staff_role`
+  - Used in `src/app/api/staff/update-role/route.ts`.
+- `set_staff_active`
+  - Used in `src/app/api/staff/set-active/route.ts`.
+- `delete_staff`
+  - Used in `src/app/api/staff/delete/route.ts`.
+
+## Tables And Views Referenced In App Code (`.from(...)`)
+
+- `profiles`
+  - Read for auth/role/company/staff listing in `src/app/page.tsx`, `src/lib/supabase/middleware.ts`, `src/hooks/use-data.ts`, and staff API routes in `src/app/api/staff/**`.
+- `projects`
+  - Read in `src/hooks/use-data.ts`; insert/update/delete in `src/lib/actions.ts`.
+- `time_entries`
+  - Read in `src/hooks/use-data.ts` and `src/app/clock/page.tsx`.
+  - Creation/update are done through RPCs (`clock_in`, `clock_out`) in `src/lib/actions.ts`.
+- `v_active_sessions` (view)
+  - Read in `src/hooks/use-data.ts` for manager active-session dashboard data.
+- `companies`
+  - Read for owner checks and authorization context in `src/app/dashboard/employees/page.tsx` and staff API routes (`src/app/api/staff/_shared.ts`, `src/app/api/staff/delete/route.ts`, `src/app/api/staff/emails/route.ts`, `src/app/api/staff/set-active/route.ts`, `src/app/api/staff/update-role/route.ts`).
+
+## Env Vars And Usage
+
+### Required For Supabase Integration
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+  - Used by browser/server/middleware/admin clients in `src/lib/supabase/client.ts`, `src/lib/supabase/server.ts`, `src/lib/supabase/middleware.ts`, `src/lib/supabase/admin.ts`.
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  - Used by browser/server/middleware clients in `src/lib/supabase/client.ts`, `src/lib/supabase/server.ts`, `src/lib/supabase/middleware.ts`.
+- `SUPABASE_SERVICE_ROLE_KEY`
+  - Used by admin client in `src/lib/supabase/admin.ts`.
+  - Also explicitly checked in staff-creation route logging context in `src/app/api/staff/route.ts`.
+
+### Additional Integration-Adjacent Vars Used In Auth/Geo Features
+
+- `NEXT_PUBLIC_APP_URL`
+  - Used for password-reset redirect construction in `src/app/login/page.tsx` and `src/app/api/staff/[id]/send-reset/route.ts`.
+- `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`
+  - Used by places autocomplete loader in `src/lib/google-places.ts`.
+- `NEXT_PUBLIC_DEFAULT_GEO_RADIUS`
+  - Used as default geofence radius fallback in `src/lib/geo.ts`.
+
+### Declared Example Env Source
+
+- `.env.local.example` contains all current expected env keys and example values.
+- `README.md` repeats env requirements and marks `SUPABASE_SERVICE_ROLE_KEY` as server-only.
+
+## Notes On RLS And Auth Context
+
+- Core RLS enablement and policies are defined in `supabase/migrations/001_initial_schema.sql` and `supabase/migrations/003_staff_credentials_internal_auth.sql`.
+- API mutation routes use session-bound Supabase clients for authorization-sensitive RPCs so DB functions receive requester `auth.uid()` (`src/app/api/staff/route.ts`, `src/app/api/staff/reset-passcode/route.ts`, `src/app/api/staff/delete/route.ts`, `src/app/api/staff/update-role/route.ts`, `src/app/api/staff/update-profile/route.ts`, `src/app/api/staff/set-active/route.ts`).
+- Service-role client is used only where direct auth admin endpoints are required (`src/lib/supabase/admin.ts`, `src/app/api/staff/**`).

@@ -7,6 +7,12 @@ import type {
   Project,
 } from "@/types/database";
 
+export type ManagerClockOutResponse = ClockOutResponse & {
+  employee_id?: string;
+  project_id?: string;
+  clock_out?: string;
+};
+
 type SupabaseError = {
   message: string;
   details?: string | null;
@@ -53,6 +59,38 @@ export async function clockOut(
   }
 
   return data as ClockOutResponse;
+}
+
+export async function managerClockOutEntry(
+  employeeId: string,
+  projectId: string
+): Promise<ManagerClockOutResponse> {
+  try {
+    const response = await fetch("/api/time-entries/manager-clock-out", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        employee_id: employeeId,
+        project_id: projectId,
+      }),
+    });
+
+    const payload = (await response
+      .json()
+      .catch(() => ({ error: "Failed to parse server response." }))) as
+      | ManagerClockOutResponse
+      | { error?: string };
+
+    if (!response.ok) {
+      return { error: payload.error || "Unable to clock out employee." };
+    }
+
+    return payload as ManagerClockOutResponse;
+  } catch {
+    return { error: "Unable to clock out employee. Please try again." };
+  }
 }
 
 export async function createProject(

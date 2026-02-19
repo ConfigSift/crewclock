@@ -13,6 +13,24 @@ export function formatDuration(ms: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+export function formatElapsedFromClockIn(
+  clockIn: string,
+  nowMs: number = Date.now()
+): string {
+  const clockInMs = new Date(clockIn).getTime();
+  if (!Number.isFinite(clockInMs)) return "0m";
+
+  const totalMinutes = Math.max(0, Math.floor((nowMs - clockInMs) / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours === 0) {
+    return `${minutes}m`;
+  }
+
+  return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+}
+
 export function formatHours(seconds: number): string {
   return (seconds / 3600).toFixed(1);
 }

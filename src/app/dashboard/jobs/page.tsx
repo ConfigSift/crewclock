@@ -12,12 +12,14 @@ import {
   Loader2,
   Building2,
   User,
+  LogOut,
 } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import {
   createProject,
   updateProject as updateProjectAction,
   deleteProject as deleteProjectAction,
+  managerClockOutEntry,
 } from "@/lib/actions";
 import {
   formatHours,
@@ -399,16 +401,71 @@ function LiveDot() {
   );
 }
 
+function formatElapsedHms(clockIn: string, nowMs: number): string | null {
+  const startMs = new Date(clockIn).getTime();
+  if (!Number.isFinite(startMs)) return null;
+
+  const totalSeconds = Math.max(0, Math.floor((nowMs - startMs) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function LiveElapsed({ clockIn }: { clockIn: string }) {
+  const [mounted, setMounted] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    setMounted(true);
+    setNowMs(Date.now());
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const hasValidClockIn = Number.isFinite(new Date(clockIn).getTime());
+  const sinceLabel =
+    mounted && hasValidClockIn ? `Since ${formatTime(clockIn)}` : "Since --";
+  const elapsed = mounted ? formatElapsedHms(clockIn, nowMs) : null;
+
+  return (
+    <span className="min-w-0 shrink-0 flex flex-col items-end gap-0 leading-none text-right">
+      <span className="text-[11px] leading-none text-text-muted whitespace-nowrap">
+        {sinceLabel}
+      </span>
+      <span className="text-xs font-semibold leading-none text-text tabular-nums whitespace-nowrap">
+        {elapsed ?? "--:--:--"}
+      </span>
+    </span>
+  );
+}
+
 // ─── MAIN PAGE ───────────────────────────────────────
 export default function JobsPage() {
-  const { projects, timeEntries, employees, removeProject, updateProject } =
-    useAppStore();
+  const {
+    profile,
+    projects,
+    timeEntries,
+    employees,
+    removeProject,
+    updateProject,
+  } = useAppStore();
 
   const [showForm, setShowForm] = useState(false);
   const [editJob, setEditJob] = useState<Project | undefined>();
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const [period, setPeriod] = useState<Period>("week");
   const [viewMode, setViewMode] = useState<"active" | "archived">("active");
+  const [clockingOutEntryId, setClockingOutEntryId] = useState<string | null>(
+    null
+  );
+  const [clockOutErrors, setClockOutErrors] = useState<Record<string, string>>(
+    {}
+  );
+
+  const canManageJobs =
+    profile?.role === "manager" || profile?.role === "admin";
 
   const displayed = projects.filter((p) =>
     viewMode === "active" ? p.status === "active" : p.status === "archived"
@@ -428,6 +485,60 @@ export default function JobsPage() {
     const result = await updateProjectAction(job.id, { status: newStatus });
     if (result.project) {
       updateProject(job.id, { status: newStatus });
+    }
+  };
+
+  const handleManagerClockOut = async (
+    entryId: string,
+    employeeId: string,
+    projectId: string
+  ) => {
+    if (!canManageJobs) return;
+
+    setClockingOutEntryId(entryId);
+    setClockOutErrors((prev) => {
+      const next = { ...prev };
+      delete next[entryId];
+      return next;
+    });
+
+    try {
+      const result = await managerClockOutEntry(employeeId, projectId);
+
+      if (result.error) {
+        const errorMessage = result.error || "Unable to clock out employee.";
+        setClockOutErrors((prev) => ({ ...prev, [entryId]: errorMessage }));
+        return;
+      }
+
+      const closedEntryId = result.entry_id || entryId;
+      const closedAt = result.clock_out || new Date().toISOString();
+
+      useAppStore.setState((state) => ({
+        timeEntries: state.timeEntries.map((entry) =>
+          entry.id === closedEntryId
+            ? {
+                ...entry,
+                clock_out: closedAt,
+                duration_seconds:
+                  result.duration_seconds ?? entry.duration_seconds ?? null,
+              }
+            : entry
+        ),
+      }));
+
+      setClockOutErrors((prev) => {
+        const next = { ...prev };
+        delete next[closedEntryId];
+        return next;
+      });
+    } catch {
+      setClockOutErrors((prev) => ({
+        ...prev,
+        [entryId]: "Unable to clock out employee. Please try again.",
+      }));
+    } finally {
+      setClockingOutEntryId(null);
     }
   };
 
@@ -629,18 +740,51 @@ export default function JobsPage() {
                       (e) => e.id === entry.employee_id
                     );
                     if (!emp) return null;
+
+                    const isClockingOut = clockingOutEntryId === entry.id;
+
                     return (
                       <div
                         key={entry.id}
-                        className="flex justify-between items-center py-1"
+                        className="py-0.5 border-b border-border last:border-b-0"
                       >
-                        <span className="text-[13px] font-semibold flex items-center gap-1.5">
-                          <User size={12} className="text-green" />
-                          {emp.first_name} {emp.last_name}
-                        </span>
-                        <span className="text-[11px] text-text-muted">
-                          Since {formatTime(entry.clock_in)}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 text-[12px] leading-4 font-semibold flex items-center gap-1.5">
+                            <User size={12} className="text-green shrink-0" />
+                            <span className="truncate">
+                              {emp.first_name} {emp.last_name}
+                            </span>
+                          </span>
+                          <div className="ml-auto flex shrink-0 items-center gap-2">
+                            <LiveElapsed clockIn={entry.clock_in} />
+                            {canManageJobs && (
+                              <button
+                                onClick={() =>
+                                  handleManagerClockOut(
+                                    entry.id,
+                                    entry.employee_id,
+                                    entry.project_id
+                                  )
+                                }
+                                disabled={isClockingOut}
+                                title="Clock Out"
+                                aria-label={`Clock out ${emp.first_name} ${emp.last_name}`}
+                                className="shrink-0 h-8 w-8 rounded-md border border-red-border text-red inline-flex items-center justify-center hover:bg-red/10 transition-colors disabled:opacity-50"
+                              >
+                                {isClockingOut ? (
+                                  <Loader2 size={13} className="animate-spin" />
+                                ) : (
+                                  <LogOut size={13} />
+                                )}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        {clockOutErrors[entry.id] && (
+                          <p className="mt-0.5 pl-[18px] text-[10px] leading-3 text-red font-semibold truncate">
+                            {clockOutErrors[entry.id]}
+                          </p>
+                        )}
                       </div>
                     );
                   })}
@@ -687,4 +831,3 @@ export default function JobsPage() {
     </div>
   );
 }
-

@@ -1,0 +1,132 @@
+﻿# CrewClock Architecture Index
+
+## Platform And Runtime
+
+- Web app stack is `Next.js 16 + React 19 + TypeScript` from `package.json`.
+- Backend integration is Supabase (`@supabase/supabase-js`, `@supabase/ssr`) from `package.json`.
+- Client state is Zustand from `package.json` and `src/lib/store.ts`.
+
+## Key Entry Points
+
+- Root app shell, metadata, fonts, and theme bootstrap script are in `src/app/layout.tsx`.
+- Route middleware entry is `src/middleware.ts`, which delegates to `src/lib/supabase/middleware.ts`.
+- Root route redirect logic (`/` -> `/login` or role home) is in `src/app/page.tsx`.
+- Manager shell/nav + data bootstrapping is in `src/app/dashboard/layout.tsx`.
+- Worker shell/nav + data bootstrapping is in `src/components/WorkerLayout.tsx`.
+- Global app store initialization is in `src/lib/store.ts`; initial loading and realtime refresh are in `src/hooks/use-data.ts`.
+
+## Routing Map (App Router)
+
+### UI Routes
+
+- `/` -> role-based redirect (`src/app/page.tsx`).
+- `/login` -> manager email/password and employee phone/passcode login (`src/app/login/page.tsx`).
+- `/reset-password` -> reset password flow after recovery session (`src/app/reset-password/page.tsx`).
+- `/clock` -> worker clock in/out, auto project detection, geofence checks (`src/app/clock/page.tsx`).
+- `/hours` -> worker hours summaries and entry list by period (`src/app/hours/page.tsx`).
+- `/dashboard` -> manager dashboard stats + active sessions (`src/app/dashboard/page.tsx`).
+- `/dashboard/jobs` -> job/project CRUD, archive/restore, geofence setup (`src/app/dashboard/jobs/page.tsx`).
+- `/dashboard/employees` -> staff CRUD, role/active toggles, passcodes, email actions (`src/app/dashboard/employees/page.tsx`).
+- `/dashboard/reports` -> project hours rollups and worker breakdown (`src/app/dashboard/reports/page.tsx`).
+
+### API Routes
+
+- `POST /api/auth/employee-login` -> verify phone/passcode, rate-limit attempts, create session (`src/app/api/auth/employee-login/route.ts`).
+- `POST /api/staff` -> create staff auth user + profile + passcode (`src/app/api/staff/route.ts`).
+- `POST /api/staff/reset-passcode` -> reset staff passcode and auth password (`src/app/api/staff/reset-passcode/route.ts`).
+- `POST /api/staff/update-profile` -> RPC profile updates (`src/app/api/staff/update-profile/route.ts`).
+- `POST /api/staff/update-role` -> RPC role updates (`src/app/api/staff/update-role/route.ts`).
+- `POST /api/staff/set-active` -> RPC active-status updates (`src/app/api/staff/set-active/route.ts`).
+- `POST /api/staff/delete` -> RPC permission check + admin delete user (`src/app/api/staff/delete/route.ts`).
+- `GET /api/staff/emails` -> owner/admin bulk email metadata lookup (`src/app/api/staff/emails/route.ts`).
+- `GET /api/staff/[id]/auth` -> owner/admin single-user auth metadata lookup (`src/app/api/staff/[id]/auth/route.ts`).
+- `PATCH /api/staff/[id]/email` -> owner/admin email update logic with internal-domain rules (`src/app/api/staff/[id]/email/route.ts`).
+- `POST /api/staff/[id]/send-reset` -> owner/admin password reset email send for manager accounts (`src/app/api/staff/[id]/send-reset/route.ts`).
+
+## Auth Model And Session Handling
+
+- Middleware uses `supabase.auth.getUser()` on every non-asset request and redirects unauthenticated users to `/login` in `src/lib/supabase/middleware.ts`.
+- Middleware redirects authenticated users away from `/` and `/login` to `/dashboard` (manager/admin) or `/clock` (worker) using `profiles.role` in `src/lib/supabase/middleware.ts`.
+- Middleware blocks worker access to `/dashboard*` routes in `src/lib/supabase/middleware.ts`.
+- API routes are excluded from middleware auth redirects and enforce auth/role checks inside each handler (`src/lib/supabase/middleware.ts`, `src/app/api/**`).
+- Server-side Supabase session cookies are wired through `cookies()` in `src/lib/supabase/server.ts` and cookie adapters in `src/lib/supabase/middleware.ts`.
+- Admin/manager login uses email/password (`src/app/login/page.tsx` -> `src/lib/actions.ts` -> `supabase.auth.signInWithPassword`).
+- Employee login uses phone/passcode (`src/app/login/page.tsx` -> `POST /api/auth/employee-login` in `src/app/api/auth/employee-login/route.ts`).
+- Employee login route applies in-memory lockout by IP and phone in `src/lib/auth-rate-limit.ts` and `src/app/api/auth/employee-login/route.ts`.
+- Password reset entry point from login UI uses `supabase.auth.resetPasswordForEmail` in `src/app/login/page.tsx`.
+- Password reset completion uses recovery session + `supabase.auth.updateUser` in `src/app/reset-password/page.tsx`.
+
+## Data Access Patterns (Supabase)
+
+- Browser client helper (`createBrowserClient`) is in `src/lib/supabase/client.ts` and is used by UI hooks/pages/actions.
+- Server client helper (`createServerClient` with cookie bridging) is in `src/lib/supabase/server.ts` and is used by API handlers and server routes.
+- Middleware-specific server client is in `src/lib/supabase/middleware.ts`.
+- Service-role admin client (`createClient` with `SUPABASE_SERVICE_ROLE_KEY`) is in `src/lib/supabase/admin.ts`.
+- Service-role usage is limited to privileged auth/admin operations (`createUser`, `updateUserById`, `deleteUser`, `getUserById`) in `src/app/api/staff/**`.
+- Session-bound RPC is intentionally used for authorization-sensitive mutations so `auth.uid()` is preserved (`src/app/api/staff/route.ts`, `src/app/api/staff/reset-passcode/route.ts`, `src/app/api/staff/delete/route.ts`, `src/app/api/staff/update-role/route.ts`, `src/app/api/staff/update-profile/route.ts`, `src/app/api/staff/set-active/route.ts`).
+- Realtime subscription for manager dashboards is implemented via `supabase.channel(...).on("postgres_changes", ...)` in `src/hooks/use-data.ts`.
+- RLS is enabled in schema migrations for core tables (`supabase/migrations/001_initial_schema.sql`, `supabase/migrations/003_staff_credentials_internal_auth.sql`).
+
+## State Management Inventory
+
+- Single Zustand store is defined in `src/lib/store.ts`.
+- Store slices: `profile`, `projects`, `activeEntry`, `timeEntries`, `employees`, `activeSessions` in `src/lib/store.ts`.
+- Initial fetch and role-specific hydration are handled in `useInitialData` in `src/hooks/use-data.ts`.
+- Realtime invalidation strategy is full reload on `time_entries` and `projects` changes in `src/hooks/use-data.ts`.
+- UI pages consume cached state via `useAppStore` across worker and manager routes (`src/app/clock/page.tsx`, `src/app/hours/page.tsx`, `src/app/dashboard/*.tsx`).
+
+## Domain Module Inventory
+
+- Staff domain: UI and flows in `src/app/dashboard/employees/page.tsx`; backend in `src/app/api/staff/**`; helper guards in `src/app/api/staff/_shared.ts`.
+- Jobs/projects domain: manager CRUD UI in `src/app/dashboard/jobs/page.tsx`; Supabase CRUD wrappers in `src/lib/actions.ts`; schema in `supabase/migrations/001_initial_schema.sql`.
+- Time entries domain: worker and manager consumption in `src/app/clock/page.tsx`, `src/app/hours/page.tsx`, `src/app/dashboard/reports/page.tsx`, `src/hooks/use-data.ts`.
+- Clock in/out domain: RPC wrappers in `src/lib/actions.ts` calling DB functions from `supabase/migrations/001_initial_schema.sql`.
+- Geofencing domain: distance/location utilities in `src/lib/geo.ts`; auto-site selection and geofence UX in `src/app/clock/page.tsx`; project radius config in `src/app/dashboard/jobs/page.tsx`.
+- Passcodes domain: format/validation in `src/lib/staff-utils.ts`; auth flow in `src/app/api/auth/employee-login/route.ts`; passcode RPCs in `supabase/migrations/003_staff_credentials_internal_auth.sql` and `supabase/migrations/004_staff_auth_hardening.sql`.
+- Emails domain: login reset request in `src/app/login/page.tsx`; owner/admin send-reset + email update in `src/app/api/staff/[id]/send-reset/route.ts` and `src/app/api/staff/[id]/email/route.ts`; bulk email reads in `src/app/api/staff/emails/route.ts`.
+
+## Background Jobs, Schedulers, Webhooks
+
+- No application-level cron/scheduler/queue/webhook modules were found under `src/`.
+- Database triggers are used for auth/profile automation and guardrails (`supabase/migrations/001_initial_schema.sql`, `supabase/migrations/003_staff_credentials_internal_auth.sql`, `supabase/migrations/004_harden_handle_new_user_for_admin_create.sql`, `supabase/migrations/005_staff_editing_and_admin_protection.sql`, `supabase/migrations/006_admin_owner_and_staff_deletion.sql`, `supabase/migrations/006_enable_role_changes.sql`).
+- Real-time event handling exists via Supabase Realtime subscriptions in `src/hooks/use-data.ts`.
+
+## Important File Index (Top 36)
+
+- `package.json`: runtime deps (`next`, `react`, Supabase SSR/JS, Zustand) and DB utility scripts.
+- `README.md`: setup flow, auth model summary, env var list, RPC list.
+- `src/app/layout.tsx`: root metadata, fonts, theme bootstrapping.
+- `src/middleware.ts`: middleware entry wrapper.
+- `src/lib/supabase/middleware.ts`: auth/session update and route protection logic.
+- `src/lib/supabase/server.ts`: server-side Supabase cookie integration.
+- `src/lib/supabase/client.ts`: browser Supabase client.
+- `src/lib/supabase/admin.ts`: service-role admin client.
+- `src/app/page.tsx`: role-based root redirect.
+- `src/app/login/page.tsx`: dual login modes and password-reset request UX.
+- `src/app/reset-password/page.tsx`: password reset completion flow.
+- `src/components/WorkerLayout.tsx`: worker shell and nav.
+- `src/app/dashboard/layout.tsx`: manager shell/nav plus data load and realtime subscription.
+- `src/lib/store.ts`: Zustand state slices and mutators.
+- `src/hooks/use-data.ts`: initial data loading + realtime reload logic.
+- `src/lib/actions.ts`: client action wrappers for RPC/auth/project CRUD.
+- `src/app/clock/page.tsx`: worker geofenced clock in/out and active session UX.
+- `src/app/hours/page.tsx`: worker periodized hours and entries.
+- `src/app/dashboard/page.tsx`: manager KPI dashboard and active sessions UI.
+- `src/app/dashboard/jobs/page.tsx`: projects CRUD/archive/delete and geofence configuration.
+- `src/app/dashboard/employees/page.tsx`: staff lifecycle, passcodes, role/status/email actions.
+- `src/app/dashboard/reports/page.tsx`: project/worker hours reporting.
+- `src/app/api/auth/employee-login/route.ts`: passcode verification + rate-limited session login.
+- `src/app/api/staff/route.ts`: staff creation pipeline (auth user + passcode + profile).
+- `src/app/api/staff/_shared.ts`: owner/admin guard helpers and email utilities.
+- `src/app/api/staff/update-profile/route.ts`: RPC-backed staff profile edit endpoint.
+- `src/app/api/staff/update-role/route.ts`: RPC-backed staff role endpoint.
+- `src/app/api/staff/set-active/route.ts`: RPC-backed staff activation endpoint.
+- `src/app/api/staff/reset-passcode/route.ts`: passcode reset + auth password update endpoint.
+- `src/app/api/staff/delete/route.ts`: RPC authorization + auth user deletion endpoint.
+- `src/app/api/staff/emails/route.ts`: owner/admin bulk auth email metadata endpoint.
+- `src/app/api/staff/[id]/auth/route.ts`: single staff auth metadata endpoint.
+- `src/app/api/staff/[id]/email/route.ts`: single staff email update endpoint.
+- `src/app/api/staff/[id]/send-reset/route.ts`: manager email reset endpoint.
+- `src/types/database.ts`: domain type contracts for app/store/UI.
+- `supabase/migrations/001_initial_schema.sql`: base schema, core RPCs, RLS policies, and active sessions view.
+
