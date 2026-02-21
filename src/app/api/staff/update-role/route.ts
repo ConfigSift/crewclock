@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getStaffAuth } from "@/lib/staff-auth";
 import { buildRpcErrorPayload } from "@/lib/supabase/rpc-errors";
 
 type Body = {
@@ -17,18 +17,18 @@ function jsonNoStore(payload: Record<string, unknown>, status: number) {
   });
 }
 
-async function requireOwnerOrAdmin() {
-  const sessionClient = await createClient();
-
-  const {
-    data: { user },
-  } = await sessionClient.auth.getUser();
-
+async function requireOwnerOrAdmin(req: NextRequest) {
+  const { authMode, user, supabase } = await getStaffAuth(req);
   if (!user) {
-    return { error: jsonNoStore({ error: "Unauthorized" }, 401) };
+    return {
+      error: NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401, headers: { "X-CrewClock-Auth-Mode": authMode } }
+      ),
+    };
   }
 
-  const { data: actor } = await sessionClient
+  const { data: actor } = await supabase
     .from("profiles")
     .select("id, role, company_id")
     .eq("id", user.id)
@@ -40,7 +40,7 @@ async function requireOwnerOrAdmin() {
     };
   }
 
-  const { data: company } = await sessionClient
+  const { data: company } = await supabase
     .from("companies")
     .select("owner_user_id")
     .eq("id", actor.company_id)
@@ -55,15 +55,15 @@ async function requireOwnerOrAdmin() {
     };
   }
 
-  return { sessionClient };
+  return { supabase, authMode };
 }
 
-export async function POST(request: Request) {
-  const context = await requireOwnerOrAdmin();
+export async function POST(req: NextRequest) {
+  const context = await requireOwnerOrAdmin(req);
   if ("error" in context) return context.error;
 
-  const { sessionClient } = context;
-  const body = (await request.json().catch(() => ({}))) as Body;
+  const { supabase, authMode } = context;
+  const body = (await req.json().catch(() => ({}))) as Body;
 
   const userId = (body.user_id ?? "").trim();
   const role = body.role;
@@ -73,7 +73,7 @@ export async function POST(request: Request) {
   }
 
   // Session-bound client keeps auth.uid() available for RPC authorization checks.
-  const { error } = await sessionClient.rpc("update_staff_role", {
+  const { error } = await supabase.rpc("update_staff_role", {
     p_user_id: userId,
     p_role: role,
   });
@@ -85,5 +85,7 @@ export async function POST(request: Request) {
     );
   }
 
-  return jsonNoStore({ success: true }, 200);
+  const res = jsonNoStore({ success: true }, 200);
+  res.headers.set("X-CrewClock-Auth-Mode", authMode);
+  return res;
 }
