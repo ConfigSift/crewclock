@@ -88,6 +88,9 @@ function formatApiError(payload: CreateStaffErrorPayload | null, fallback: strin
   return lines.join(" ");
 }
 
+const ADMIN_PROTECTED_MESSAGE = "Admin accounts are protected.";
+const isAdminRole = (role?: string) => (role ?? "").toLowerCase() === "admin";
+
 export default function EmployeesPage() {
   const { profile, employees, projects, timeEntries, setEmployees } = useAppStore();
 
@@ -144,6 +147,9 @@ export default function EmployeesPage() {
 
   const isRealEmail = (email: string | null | undefined): boolean =>
     Boolean(email && !isInternalEmail(email));
+  const currentUserIsAdmin = isAdminRole(profile?.role);
+  const targetIsAdmin = isAdminRole(editTarget?.role);
+  const canEditRole = currentUserIsAdmin && !targetIsAdmin;
 
   useEffect(() => {
     if (!passcodeReveal) return;
@@ -336,6 +342,12 @@ export default function EmployeesPage() {
   };
 
   const resetPasscode = async (employee: Profile) => {
+    const targetIsAdmin = isAdminRole(employee.role);
+    if (targetIsAdmin) {
+      setActionError(ADMIN_PROTECTED_MESSAGE);
+      return;
+    }
+
     setActionError("");
 
     const response = await fetch("/api/staff/reset-passcode", {
@@ -434,6 +446,10 @@ export default function EmployeesPage() {
 
   const saveEdit = async () => {
     if (!editTarget || !editForm) return;
+    const currentUserIsAdmin = isAdminRole(profile?.role);
+    const targetIsAdmin = isAdminRole(editTarget.role);
+    const canEditRole = currentUserIsAdmin && !targetIsAdmin;
+    const roleChanged = editForm.role !== editTarget.role;
 
     setEditSaving(true);
     setEditError("");
@@ -459,11 +475,17 @@ export default function EmployeesPage() {
       return;
     }
 
-    if (
-      isOwnerOrAdmin &&
-      editForm.role !== "admin" &&
-      editForm.role !== editTarget.role
-    ) {
+    if (roleChanged && !canEditRole) {
+      setEditError(
+        targetIsAdmin
+          ? ADMIN_PROTECTED_MESSAGE
+          : "Only admins can change roles."
+      );
+      setEditSaving(false);
+      return;
+    }
+
+    if (canEditRole && roleChanged) {
       const roleResponse = await fetch("/api/staff/update-role", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -528,6 +550,12 @@ export default function EmployeesPage() {
     }
 
     if (isOwnerOrAdmin && editForm.is_active !== editTarget.is_active) {
+      if (targetIsAdmin) {
+        setEditError(ADMIN_PROTECTED_MESSAGE);
+        setEditSaving(false);
+        return;
+      }
+
       const activeResponse = await fetch("/api/staff/set-active", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -592,6 +620,12 @@ export default function EmployeesPage() {
   };
 
   const openDeleteModal = (employee: Profile) => {
+    const targetIsAdmin = isAdminRole(employee.role);
+    if (targetIsAdmin) {
+      setActionError(ADMIN_PROTECTED_MESSAGE);
+      return;
+    }
+
     setDeleteTarget(employee);
     setDeleteError("");
   };
@@ -606,12 +640,14 @@ export default function EmployeesPage() {
     const employee = deleteTarget;
     if (!employee) return;
     if (!profile || !isOwnerOrAdmin) return;
+    const targetIsAdmin = isAdminRole(employee.role);
+
     if (employee.id === profile.id) {
       setDeleteError("You cannot delete your own account.");
       return;
     }
-    if (employee.id === ownerUserId || employee.role === "admin") {
-      setDeleteError("Protected admin account cannot be deleted.");
+    if (employee.id === ownerUserId || targetIsAdmin) {
+      setDeleteError(ADMIN_PROTECTED_MESSAGE);
       return;
     }
     setDeleteError("");
@@ -653,6 +689,11 @@ export default function EmployeesPage() {
 
   const toggleStaffActive = async (employee: Profile) => {
     if (!isOwnerOrAdmin) return;
+    const targetIsAdmin = isAdminRole(employee.role);
+    if (targetIsAdmin) {
+      setActionError(ADMIN_PROTECTED_MESSAGE);
+      return;
+    }
     if (employee.id === ownerUserId || employee.id === profile?.id) {
       setActionError("Protected account status cannot be changed.");
       return;
@@ -795,18 +836,18 @@ export default function EmployeesPage() {
             : null;
           const isActive = activeEmployeeIds.has(emp.id);
           const isProtectedAdmin = ownerUserId !== null && emp.id === ownerUserId;
-          const isAdminAccount = emp.role === "admin";
+          const targetIsAdmin = isAdminRole(emp.role);
           const canEdit = canEditStaff(emp);
-          const canResetPasscode = !isProtectedAdmin;
+          const canResetPasscode = !isProtectedAdmin && !targetIsAdmin;
           const canDelete =
             isOwnerOrAdmin &&
             !isProtectedAdmin &&
-            emp.role !== "admin" &&
+            !targetIsAdmin &&
             profile?.id !== emp.id;
           const canToggleActive =
             isOwnerOrAdmin &&
             !isProtectedAdmin &&
-            emp.role !== "admin" &&
+            !targetIsAdmin &&
             profile?.id !== emp.id;
           const staffEmail = staffAuthById[emp.id]?.email ?? null;
           const visibleEmail = isRealEmail(staffEmail) ? staffEmail : "-";
@@ -847,6 +888,11 @@ export default function EmployeesPage() {
                       >
                         {emp.role}
                       </span>
+                      {targetIsAdmin && (
+                        <span className="inline-flex px-2 py-0.5 rounded-md text-[9px] font-semibold tracking-wide border border-border text-text-dim bg-bg">
+                          Admin (protected)
+                        </span>
+                      )}
                       {!emp.is_active && (
                         <span className="inline-flex px-1.5 py-0.5 rounded-md text-[9px] text-red font-bold uppercase tracking-widest border border-red-border bg-red-dark">
                           inactive
@@ -877,7 +923,7 @@ export default function EmployeesPage() {
                   onClick={() => openEditModal(emp)}
                   disabled={!canEdit}
                   title={
-                    !canEdit && (isProtectedAdmin || isAdminAccount)
+                    !canEdit && (isProtectedAdmin || targetIsAdmin)
                       ? "Protected Admin account"
                       : undefined
                   }
@@ -885,15 +931,17 @@ export default function EmployeesPage() {
                 >
                   <Pencil size={14} /> Edit
                 </button>
-                <button
-                  onClick={() => resetPasscode(emp)}
-                  disabled={!canResetPasscode}
-                  title={!canResetPasscode ? "Protected Admin account" : undefined}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-border rounded-lg text-[11px] font-semibold text-text-muted hover:bg-bg hover:text-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <KeyRound size={14} /> Reset passcode
-                </button>
-                {isOwnerOrAdmin && (
+                {!targetIsAdmin && (
+                  <button
+                    onClick={() => resetPasscode(emp)}
+                    disabled={!canResetPasscode}
+                    title={!canResetPasscode ? "Protected Admin account" : undefined}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-border rounded-lg text-[11px] font-semibold text-text-muted hover:bg-bg hover:text-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <KeyRound size={14} /> Reset passcode
+                  </button>
+                )}
+                {isOwnerOrAdmin && !targetIsAdmin && (
                   <button
                     onClick={() => toggleStaffActive(emp)}
                     disabled={!canToggleActive}
@@ -904,7 +952,7 @@ export default function EmployeesPage() {
                     {emp.is_active ? "Deactivate" : "Activate"}
                   </button>
                 )}
-                {isOwnerOrAdmin && (
+                {isOwnerOrAdmin && !targetIsAdmin && (
                   <button
                     onClick={() => openDeleteModal(emp)}
                     disabled={!canDelete || deletingStaffId === emp.id || deleteSaving}
@@ -922,12 +970,6 @@ export default function EmployeesPage() {
                   </button>
                 )}
               </div>
-
-              {(isProtectedAdmin || isAdminAccount) && !isOwnerOrAdmin && (
-                <p className="mt-2 text-[11px] text-text-muted font-semibold">
-                  Protected Admin account
-                </p>
-              )}
 
               {activeEntry && activeProject && (
                 <div className="mt-2 p-2 bg-green-dark rounded-lg border border-green-border">
@@ -1069,42 +1111,43 @@ export default function EmployeesPage() {
                       </button>
                     )}
 
-                  {ownerUserId === editTarget.id ? (
-                    <p className="text-[11px] text-text-muted mb-3.5">
-                      Protected owner account must remain admin.
-                    </p>
-                  ) : (
-                    <>
-                      <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
-                        Account Type
-                      </label>
-                      <select
-                        className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm mb-1.5 outline-none focus:border-accent"
-                        value={editForm.role === "admin" ? "" : editForm.role}
-                        onChange={(event) =>
-                          setEditForm((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  role: event.target.value as UserRole,
-                                }
-                              : prev
-                          )
-                        }
-                      >
-                        {editForm.role === "admin" && (
-                          <option value="" disabled>
-                            current: admin (legacy)
-                          </option>
-                        )}
-                        <option value="worker">worker</option>
-                        <option value="manager">manager</option>
-                      </select>
-                      <p className="text-[11px] text-text-muted mb-3.5">
-                        Only the protected owner account can be admin.
-                      </p>
-                    </>
-                  )}
+                  <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
+                    Account Type
+                  </label>
+                  <select
+                    className={`w-full p-3 bg-bg border rounded-lg text-sm mb-1.5 outline-none ${
+                      !canEditRole
+                        ? "border-border text-text-dim opacity-60 cursor-not-allowed"
+                        : "border-border text-text focus:border-accent"
+                    }`}
+                    value={editForm.role === "admin" ? "" : editForm.role}
+                    onChange={(event) =>
+                      setEditForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              role: event.target.value as UserRole,
+                            }
+                          : prev
+                      )
+                    }
+                    disabled={!canEditRole}
+                  >
+                    {editForm.role === "admin" && (
+                      <option value="" disabled>
+                        current: admin (legacy)
+                      </option>
+                    )}
+                    <option value="worker">worker</option>
+                    <option value="manager">manager</option>
+                  </select>
+                  <p className="text-[11px] text-text-muted mb-3.5">
+                    {targetIsAdmin
+                      ? "Admin role cannot be changed."
+                      : !currentUserIsAdmin
+                        ? "Only admins can change roles."
+                      : "Only the protected owner account can be admin."}
+                  </p>
 
                   <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
                     Active Status
@@ -1116,11 +1159,14 @@ export default function EmployeesPage() {
                     <button
                       type="button"
                       disabled={
+                        targetIsAdmin ||
                         ownerUserId === editTarget.id ||
                         (profile?.id === editTarget.id && editForm.is_active === true)
                       }
                       title={
-                        ownerUserId === editTarget.id
+                        targetIsAdmin
+                          ? ADMIN_PROTECTED_MESSAGE
+                          : ownerUserId === editTarget.id
                           ? "Protected Admin account"
                           : profile?.id === editTarget.id && editForm.is_active === true
                             ? "Cannot deactivate your own owner/admin account"

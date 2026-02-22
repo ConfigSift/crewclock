@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   HardHat,
   LayoutGrid,
+  Clock,
   Building2,
   Users,
   BarChart3,
@@ -16,6 +17,7 @@ import ThemeToggle from "@/components/ThemeToggle";
 
 const navItems = [
   { href: "/dashboard", icon: LayoutGrid, label: "Dashboard" },
+  { href: "/dashboard/clock", icon: Clock, label: "My Time" },
   { href: "/dashboard/jobs", icon: Building2, label: "Jobs" },
   { href: "/dashboard/employees", icon: Users, label: "Crew" },
   { href: "/dashboard/reports", icon: BarChart3, label: "Hours" },
