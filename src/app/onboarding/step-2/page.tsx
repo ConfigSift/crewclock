@@ -41,10 +41,6 @@ export default async function OnboardingStepTwoPage() {
     redirect("/dashboard");
   }
 
-  if (onboardingStepCompleted >= 2) {
-    redirect("/onboarding/step-3");
-  }
-
   return (
     <OnboardingShell
       step={2}
