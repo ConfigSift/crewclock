@@ -1,22 +1,19 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import {
-  generatePasscode,
-  isValidPasscode,
-  normalizePhone,
-} from "@/lib/staff-utils";
+import { generatePasscode, normalizePhone } from "@/lib/staff-utils";
 import { buildRpcErrorPayload } from "@/lib/supabase/rpc-errors";
 
 type StaffRole = "worker" | "manager";
+type UserRole = "worker" | "manager" | "admin";
 
 type CreateStaffBody = {
+  business_id?: string;
   first_name?: string;
   last_name?: string;
   phone?: string;
-  role?: StaffRole;
-  email?: string;
-  passcode?: string;
+  role?: StaffRole | "admin";
+  allowRoleUpgrade?: boolean;
 };
 
 type ErrorPayload = {
@@ -26,6 +23,27 @@ type ErrorPayload = {
   details: string | null;
   hint: string | null;
   raw: string;
+};
+
+type ActorProfile = {
+  id: string;
+  role: UserRole;
+  company_id: string;
+  account_id: string | null;
+  is_active: boolean;
+};
+
+type BusinessRecord = {
+  id: string;
+  account_id: string;
+};
+
+type ExistingProfile = {
+  id: string;
+  role: UserRole;
+  phone: string;
+  company_id: string;
+  account_id: string | null;
 };
 
 function jsonNoStore(payload: Record<string, unknown>, status: number) {
@@ -75,7 +93,7 @@ function toErrorPayload(input: unknown): ErrorPayload {
   return {
     error:
       (typeof errorObj.message === "string" && errorObj.message) ||
-      "Failed to create staff account.",
+      "Failed to create or attach staff account.",
     status:
       typeof errorObj.status === "number"
         ? errorObj.status
@@ -101,20 +119,11 @@ function toErrorPayload(input: unknown): ErrorPayload {
 }
 
 function authLogGuidance(): string {
-  return "Supabase Dashboard -> Logs: check Auth and Postgres. Filter by 'Database error creating new user', request_id, and this request timestamp.";
+  return "Supabase Dashboard -> Logs: check Auth and Postgres around this request timestamp.";
 }
 
-function normalizeEmail(input: string): string | null {
-  const email = input.trim().toLowerCase();
-  if (!email) return null;
-  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  return valid ? email : null;
-}
-
-function internalEmailFor(phone: string): string {
-  const digits = phone.replace(/\D/g, "");
-  const random = crypto.randomUUID().split("-")[0];
-  return `staff-${digits}-${random}@internal.crewclock.local`;
+function membershipRoleFor(role: UserRole): StaffRole {
+  return role === "manager" ? "manager" : "worker";
 }
 
 async function getManagerContext() {
@@ -132,29 +141,111 @@ async function getManagerContext() {
 
   const { data: actorProfile, error: profileError } = await sessionClient
     .from("profiles")
-    .select("id, company_id, role")
+    .select("id, role, company_id, account_id, is_active")
     .eq("id", user.id)
     .single();
 
   if (profileError || !actorProfile) {
     return {
-      error: NextResponse.json(
-        { error: "Unable to load your profile." },
-        { status: 403 }
-      ),
+      error: jsonNoStore({ error: "Unable to load your profile." }, 403),
+    };
+  }
+
+  if (!actorProfile.is_active) {
+    return {
+      error: jsonNoStore({ error: "Your account is inactive." }, 403),
     };
   }
 
   if (actorProfile.role !== "manager" && actorProfile.role !== "admin") {
     return {
-      error: NextResponse.json(
+      error: jsonNoStore(
         { error: "Manager or admin access required." },
-        { status: 403 }
+        403
       ),
     };
   }
 
-  return { sessionClient, actorProfile };
+  return {
+    sessionClient,
+    actorProfile: actorProfile as ActorProfile,
+  };
+}
+
+async function requireBusinessAccess(
+  admin: ReturnType<typeof createAdminClient>,
+  sessionClient: Awaited<ReturnType<typeof createClient>>,
+  actorProfile: ActorProfile,
+  businessId: string
+): Promise<
+  | { ok: false; response: NextResponse }
+  | { ok: true; business: BusinessRecord }
+> {
+  const actorAccountId = actorProfile.account_id ?? actorProfile.company_id;
+
+  const { data: business, error: businessError } = await admin
+    .from("businesses")
+    .select("id, account_id")
+    .eq("id", businessId)
+    .single();
+
+  if (businessError || !business) {
+    return {
+      ok: false,
+      response: jsonNoStore({ error: "Business not found." }, 404),
+    };
+  }
+
+  if (business.account_id !== actorAccountId) {
+    return {
+      ok: false,
+      response: jsonNoStore(
+        { error: "You do not have access to that business." },
+        403
+      ),
+    };
+  }
+
+  if (actorProfile.role !== "admin") {
+    const { data: actorMembership } = await sessionClient
+      .from("business_memberships")
+      .select("profile_id")
+      .eq("business_id", businessId)
+      .eq("profile_id", actorProfile.id)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (!actorMembership) {
+      return {
+        ok: false,
+        response: jsonNoStore(
+          { error: "You are not an active member of this business." },
+          403
+        ),
+      };
+    }
+  }
+
+  return { ok: true, business: business as BusinessRecord };
+}
+
+async function upsertBusinessMembership(
+  admin: ReturnType<typeof createAdminClient>,
+  businessId: string,
+  profileId: string,
+  role: StaffRole
+): Promise<{ error: string | null }> {
+  const { error } = await admin.from("business_memberships").upsert(
+    {
+      business_id: businessId,
+      profile_id: profileId,
+      role,
+      is_active: true,
+    },
+    { onConflict: "business_id,profile_id" }
+  );
+
+  return { error: error?.message ?? null };
 }
 
 export async function POST(request: Request) {
@@ -167,71 +258,181 @@ export async function POST(request: Request) {
 
     const body = (await request.json().catch(() => ({}))) as CreateStaffBody;
 
+    const businessId = (body.business_id ?? "").trim();
     const firstName = (body.first_name ?? "").trim();
     const lastName = (body.last_name ?? "").trim();
     const phone = normalizePhone(body.phone ?? "");
-    const role = body.role;
-    const providedPasscode = (body.passcode ?? "").trim();
+    const requestedRole = body.role;
+    const allowRoleUpgrade = body.allowRoleUpgrade === true;
 
-    if (
-      !firstName ||
-      !lastName ||
-      !phone ||
-      (role !== "worker" && role !== "manager")
-    ) {
+    if (!businessId || !firstName || !lastName || !phone || !requestedRole) {
       return jsonNoStore(
-        { error: "First name, last name, phone, and valid role are required." },
+        {
+          error:
+            "business_id, first_name, last_name, phone, and role are required.",
+        },
         400
       );
     }
 
-    const requestedEmail = (body.email ?? "").trim();
-    const normalizedEmail = normalizeEmail(requestedEmail);
-    if (requestedEmail && !normalizedEmail) {
-      return jsonNoStore({ error: "Email is invalid." }, 400);
-    }
-
-    const passcode = providedPasscode || generatePasscode();
-    if (!isValidPasscode(passcode)) {
-      return jsonNoStore({ error: "Passcode must be exactly 6 digits." }, 400);
-    }
-
-    const email = normalizedEmail ?? internalEmailFor(phone);
-
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-    console.info("[staff.create] createUser input", {
-      service_role_present: Boolean(serviceRoleKey),
-      service_role_length: serviceRoleKey.length,
-      email,
-      role,
-      company_id: actorProfile.company_id,
-    });
-
-    const { data: created, error: createError } =
-      await admin.auth.admin.createUser({
-        email,
-        password: passcode,
-        email_confirm: true,
-        user_metadata: {
-          company_id: actorProfile.company_id,
-          first_name: firstName,
-          last_name: lastName,
-          phone,
-          role,
+    if (requestedRole !== "worker" && requestedRole !== "manager") {
+      return jsonNoStore(
+        {
+          error: "Role must be either 'worker' or 'manager'.",
+          code: "INVALID_ROLE",
         },
-      });
+        400
+      );
+    }
+
+    const access = await requireBusinessAccess(
+      admin,
+      sessionClient,
+      actorProfile,
+      businessId
+    );
+    if (!access.ok) return access.response;
+
+    const { business } = access;
+
+    const { data: existingByPhone, error: existingError } = await admin
+      .from("profiles")
+      .select("id, role, phone, company_id, account_id")
+      .eq("phone", phone)
+      .maybeSingle();
+
+    if (existingError) {
+      return jsonNoStore(
+        {
+          error: "Failed to look up profile by phone.",
+          code: existingError.code ?? null,
+          details: existingError.details ?? null,
+          hint: existingError.hint ?? null,
+        },
+        400
+      );
+    }
+
+    if (existingByPhone) {
+      const existing = existingByPhone as ExistingProfile;
+      let finalRole: UserRole = existing.role;
+      const existingAccountId = existing.account_id ?? existing.company_id;
+
+      if (existingAccountId !== business.account_id) {
+        return jsonNoStore(
+          {
+            error:
+              "This phone already belongs to a profile under a different account and cannot be attached here.",
+            code: "PHONE_ACCOUNT_MISMATCH",
+          },
+          409
+        );
+      }
+
+      if (existing.role === "admin") {
+        return jsonNoStore(
+          {
+            error: "Admin users cannot be managed through this endpoint.",
+            code: "ADMIN_ROLE_FORBIDDEN",
+          },
+          403
+        );
+      }
+
+      if (requestedRole !== existing.role) {
+        if (requestedRole === "manager" && existing.role === "worker") {
+          if (!allowRoleUpgrade) {
+            return jsonNoStore(
+              {
+                error:
+                  "This phone already belongs to a worker. Re-submit with allowRoleUpgrade=true to promote to manager.",
+                code: "ROLE_UPGRADE_CONFIRM_REQUIRED",
+              },
+              409
+            );
+          }
+
+          const { error: upgradeError } = await admin
+            .from("profiles")
+            .update({ role: "manager" })
+            .eq("id", existing.id);
+
+          if (upgradeError) {
+            return jsonNoStore(
+              {
+                error: "Unable to upgrade existing profile role.",
+                code: upgradeError.code ?? null,
+                details: upgradeError.details ?? null,
+                hint: upgradeError.hint ?? null,
+              },
+              400
+            );
+          }
+
+          finalRole = "manager";
+        } else if (requestedRole === "worker" && existing.role === "manager") {
+          return jsonNoStore(
+            {
+              error:
+                "This phone already belongs to a manager. Downgrade is not allowed from this endpoint.",
+              code: "ROLE_DOWNGRADE_FORBIDDEN",
+            },
+            409
+          );
+        }
+      }
+
+      const membership = await upsertBusinessMembership(
+        admin,
+        businessId,
+        existing.id,
+        membershipRoleFor(finalRole)
+      );
+
+      if (membership.error) {
+        return jsonNoStore(
+          {
+            error: "Unable to attach existing profile to business.",
+            details: membership.error,
+          },
+          400
+        );
+      }
+
+      return jsonNoStore(
+        {
+          created: false,
+          attached: true,
+          profile_id: existing.id,
+          role: finalRole,
+        },
+        200
+      );
+    }
+
+    const passcode = generatePasscode();
+    const email = `staff-${phone.replace(/\D/g, "")}-${crypto
+      .randomUUID()
+      .split("-")[0]}@internal.crewclock.local`;
+
+    const { data: created, error: createError } = await admin.auth.admin.createUser({
+      email,
+      password: passcode,
+      email_confirm: true,
+      user_metadata: {
+        first_name: firstName,
+        last_name: lastName,
+        phone,
+        role: requestedRole,
+        company_id: actorProfile.company_id,
+        account_id: business.account_id,
+      },
+    });
 
     if (createError || !created.user) {
       const errorPayload = toErrorPayload(
         createError ?? new Error("Database error creating new user")
       );
-
-      console.error("[staff.create] createUser failed", {
-        ...errorPayload,
-        email,
-        role,
-        company_id: actorProfile.company_id,
-      });
 
       return jsonNoStore(
         {
@@ -244,19 +445,38 @@ export async function POST(request: Request) {
 
     const createdUserId = created.user.id;
 
-    // IMPORTANT: use session-bound client for RPC so auth.uid() is the requester.
-    console.info("[staff.create] set_staff_passcode via session client", {
-      requester_id: actorProfile.id,
-      target_user_id: createdUserId,
-    });
-    const { error: passcodeError } = await sessionClient.rpc(
-      "set_staff_passcode",
+    const { error: profileUpsertError } = await admin.from("profiles").upsert(
       {
-        p_user_id: createdUserId,
-        p_phone: phone,
-        p_passcode: passcode,
-      }
+        id: createdUserId,
+        company_id: actorProfile.company_id,
+        account_id: business.account_id,
+        first_name: firstName,
+        last_name: lastName,
+        phone,
+        role: requestedRole,
+        is_active: true,
+      },
+      { onConflict: "id" }
     );
+
+    if (profileUpsertError) {
+      await admin.auth.admin.deleteUser(createdUserId);
+      return jsonNoStore(
+        {
+          error: "Unable to create profile for new staff user.",
+          code: profileUpsertError.code ?? null,
+          details: profileUpsertError.details ?? null,
+          hint: profileUpsertError.hint ?? null,
+        },
+        400
+      );
+    }
+
+    const { error: passcodeError } = await sessionClient.rpc("set_staff_passcode", {
+      p_user_id: createdUserId,
+      p_phone: phone,
+      p_passcode: passcode,
+    });
 
     if (passcodeError) {
       await admin.auth.admin.deleteUser(createdUserId);
@@ -270,34 +490,35 @@ export async function POST(request: Request) {
       );
     }
 
-    const { data: profile } = await admin
-      .from("profiles")
-      .select(
-        "id, company_id, first_name, last_name, phone, role, is_active, created_at"
-      )
-      .eq("id", createdUserId)
-      .single();
+    const membership = await upsertBusinessMembership(
+      admin,
+      businessId,
+      createdUserId,
+      membershipRoleFor(requestedRole)
+    );
+
+    if (membership.error) {
+      await admin.auth.admin.deleteUser(createdUserId);
+      return jsonNoStore(
+        {
+          error: "Unable to attach new profile to business.",
+          details: membership.error,
+        },
+        400
+      );
+    }
 
     return jsonNoStore(
       {
-        staff: profile ?? {
-          id: createdUserId,
-          company_id: actorProfile.company_id,
-          first_name: firstName,
-          last_name: lastName,
-          phone,
-          role,
-          is_active: true,
-          created_at: new Date().toISOString(),
-        },
+        created: true,
         passcode,
-        generated: !providedPasscode,
+        profile_id: createdUserId,
+        role: requestedRole,
       },
       200
     );
   } catch (error: unknown) {
     const errorPayload = toErrorPayload(error);
-    console.error("[staff.create] unexpected failure", errorPayload);
 
     return jsonNoStore(
       {

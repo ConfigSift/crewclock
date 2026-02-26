@@ -5,8 +5,8 @@ import { createClient } from "@/lib/supabase/client";
 import { useAppStore } from "@/lib/store";
 import type { Profile } from "@/types/database";
 
-// ─── Load initial data based on role ─────────────────
-export function useInitialData() {
+// Load initial data scoped to active business
+export function useInitialData(activeBusinessId: string | null = null) {
   const {
     profile,
     setProfile,
@@ -20,84 +20,123 @@ export function useInitialData() {
   const loadData = useCallback(async () => {
     const supabase = createClient();
 
-    // Get current user
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
 
-    // Get profile
+    if (!user) {
+      setProjects([]);
+      setActiveEntry(null);
+      setTimeEntries([]);
+      setEmployees([]);
+      setActiveSessions([]);
+      return;
+    }
+
     const { data: prof } = await supabase
       .from("profiles")
       .select("*")
       .eq("id", user.id)
       .single();
-    if (!prof) return;
+
+    if (!prof) {
+      setProjects([]);
+      setActiveEntry(null);
+      setTimeEntries([]);
+      setEmployees([]);
+      setActiveSessions([]);
+      return;
+    }
+
     setProfile(prof as Profile);
+
+    const businessId = activeBusinessId ?? prof.company_id ?? null;
+
+    if (!businessId) {
+      setProjects([]);
+      setActiveEntry(null);
+      setTimeEntries([]);
+      setEmployees([]);
+      setActiveSessions([]);
+      return;
+    }
 
     const isManager = prof.role === "manager" || prof.role === "admin";
 
-    // Load projects
     if (isManager) {
       const { data: projects } = await supabase
         .from("projects")
         .select("*")
-        .eq("company_id", prof.company_id)
+        .eq("business_id", businessId)
         .order("created_at", { ascending: false });
       setProjects(projects || []);
     } else {
       const { data: projects } = await supabase
         .from("projects")
         .select("*")
-        .eq("company_id", prof.company_id)
+        .eq("business_id", businessId)
         .eq("status", "active")
         .order("name");
       setProjects(projects || []);
     }
 
-    // Load active entry (worker)
     const { data: active } = await supabase
       .from("time_entries")
       .select("*")
       .eq("employee_id", user.id)
+      .eq("business_id", businessId)
       .is("clock_out", null)
       .limit(1)
       .single();
     setActiveEntry(active || null);
 
-    // Load recent time entries
     if (isManager) {
       const { data: entries } = await supabase
         .from("time_entries")
         .select("*, profiles(first_name, last_name, phone), projects(name, address)")
-        .eq("company_id", prof.company_id)
+        .eq("business_id", businessId)
         .order("clock_in", { ascending: false })
         .limit(200);
       setTimeEntries(entries || []);
 
-      // Load employees
-      const { data: emps } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("company_id", prof.company_id)
-        .eq("is_active", true)
-        .order("first_name");
-      setEmployees(emps || []);
+      const { data: memberships } = await supabase
+        .from("business_memberships")
+        .select("profiles(*)")
+        .eq("business_id", businessId)
+        .eq("is_active", true);
 
-      // Load active sessions
+      const emps = (memberships ?? [])
+        .map(
+          (row) =>
+            (row as { profiles: Profile | Profile[] | null }).profiles ?? null
+        )
+        .flat()
+        .filter(Boolean) as Profile[];
+
+      setEmployees(
+        emps.sort((a, b) =>
+          `${a.first_name} ${a.last_name}`.localeCompare(
+            `${b.first_name} ${b.last_name}`
+          )
+        )
+      );
+
       const { data: sessions } = await supabase
         .from("v_active_sessions")
         .select("*")
-        .eq("company_id", prof.company_id);
+        .eq("business_id", businessId);
       setActiveSessions(sessions || []);
     } else {
       const { data: entries } = await supabase
         .from("time_entries")
         .select("*, projects(name, address)")
         .eq("employee_id", user.id)
+        .eq("business_id", businessId)
         .order("clock_in", { ascending: false })
         .limit(100);
       setTimeEntries(entries || []);
+      setEmployees([]);
+      setActiveSessions([]);
     }
   }, [
     setProfile,
@@ -106,39 +145,46 @@ export function useInitialData() {
     setTimeEntries,
     setEmployees,
     setActiveSessions,
+    activeBusinessId,
   ]);
 
   useEffect(() => {
-    loadData();
+    void loadData();
   }, [loadData]);
 
   return { profile, reload: loadData };
 }
 
-// ─── Real-time subscription for manager dashboard ────
-export function useRealtimeSubscription() {
+// Real-time subscription for manager dashboard
+export function useRealtimeSubscription(
+  activeBusinessId: string | null,
+  reload: () => Promise<void>
+) {
   const profile = useAppStore((s) => s.profile);
-  const reload = useInitialData().reload;
 
   useEffect(() => {
-    if (!profile || (profile.role !== "manager" && profile.role !== "admin"))
+    if (
+      !profile ||
+      !activeBusinessId ||
+      (profile.role !== "manager" && profile.role !== "admin")
+    ) {
       return;
+    }
 
     const supabase = createClient();
 
     const channel = supabase
-      .channel("company-updates")
+      .channel(`business-updates-${activeBusinessId}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "time_entries",
-          filter: `company_id=eq.${profile.company_id}`,
+          filter: `business_id=eq.${activeBusinessId}`,
         },
         () => {
-          // Reload all data on any time entry change
-          reload();
+          void reload();
         }
       )
       .on(
@@ -147,10 +193,10 @@ export function useRealtimeSubscription() {
           event: "*",
           schema: "public",
           table: "projects",
-          filter: `company_id=eq.${profile.company_id}`,
+          filter: `business_id=eq.${activeBusinessId}`,
         },
         () => {
-          reload();
+          void reload();
         }
       )
       .subscribe();
@@ -158,5 +204,5 @@ export function useRealtimeSubscription() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [profile, reload]);
+  }, [profile, reload, activeBusinessId]);
 }

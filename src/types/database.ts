@@ -1,9 +1,17 @@
-// ─── Database Types ──────────────────────────────────
+// Database types
 // Auto-generate with: npx supabase gen types typescript --local > src/types/database.ts
-// These are hand-written to match our schema until we generate them
+// These are hand-written to match our schema until we generate them.
 
-export type UserRole = "worker" | "manager" | "admin";
+export type UserRole = "admin" | "manager" | "worker";
 export type ProjectStatus = "active" | "archived" | "completed";
+export type BillingStatus =
+  | "inactive"
+  | "trialing"
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "unpaid";
+export type BusinessMembershipRole = "manager" | "worker";
 
 export interface Company {
   id: string;
@@ -13,12 +21,54 @@ export interface Company {
     geo_radius_meters: number;
     timezone: string;
   };
+  owner_user_id: string | null;
   created_at: string;
+}
+
+export interface Account {
+  id: string;
+  owner_profile_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Business {
+  id: string;
+  account_id: string;
+  name: string;
+  address_line1: string | null;
+  address_line2: string | null;
+  city: string | null;
+  state: string | null;
+  postal_code: string | null;
+  country: string | null;
+  billing_status: BillingStatus;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  stripe_price_id: string | null;
+  cancel_at_period_end: boolean;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  billing_started_at: string | null;
+  billing_canceled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BusinessMembership {
+  id: string;
+  business_id: string;
+  profile_id: string;
+  role: BusinessMembershipRole;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Profile {
   id: string;
   company_id: string;
+  account_id: string | null;
   first_name: string;
   last_name: string;
   phone: string;
@@ -30,6 +80,7 @@ export interface Profile {
 export interface Project {
   id: string;
   company_id: string;
+  business_id: string | null;
   name: string;
   address: string;
   lat: number;
@@ -44,6 +95,7 @@ export interface Project {
 export interface TimeEntry {
   id: string;
   company_id: string;
+  business_id: string | null;
   employee_id: string;
   project_id: string;
   clock_in: string;
@@ -57,10 +109,11 @@ export interface TimeEntry {
   created_at: string;
 }
 
-// ─── View Types ──────────────────────────────────────
+// View types
 export interface ActiveSession {
   entry_id: string;
   company_id: string;
+  business_id: string;
   employee_id: string;
   project_id: string;
   clock_in: string;
@@ -76,7 +129,7 @@ export interface ActiveSession {
   elapsed_seconds: number;
 }
 
-// ─── RPC Response Types ──────────────────────────────
+// RPC response types
 export interface ClockInResponse {
   success?: boolean;
   error?: string;
@@ -97,7 +150,7 @@ export interface HoursSummary {
   entry_count: number;
 }
 
-// ─── Joined Types (for UI) ───────────────────────────
+// Joined types (for UI)
 export interface TimeEntryWithProject extends TimeEntry {
   projects: Pick<Project, "name" | "address">;
 }

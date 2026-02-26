@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   HardHat,
@@ -8,31 +9,50 @@ import {
   Building2,
   Users,
   BarChart3,
+  User,
   LogOut,
 } from "lucide-react";
 import { signOut } from "@/lib/actions";
 import { useInitialData, useRealtimeSubscription } from "@/hooks/use-data";
-import { useAppStore } from "@/lib/store";
 import ThemeToggle from "@/components/ThemeToggle";
+import { BusinessProvider, useBusiness } from "@/contexts/BusinessContext";
 
-const navItems = [
-  { href: "/dashboard", icon: LayoutGrid, label: "Dashboard" },
-  { href: "/dashboard/clock", icon: Clock, label: "My Time" },
-  { href: "/dashboard/jobs", icon: Building2, label: "Jobs" },
-  { href: "/dashboard/employees", icon: Users, label: "Crew" },
-  { href: "/dashboard/reports", icon: BarChart3, label: "Hours" },
-];
-
-export default function DashboardLayout({
+function DashboardLayoutShell({
   children,
 }: {
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const profile = useAppStore((s) => s.profile);
-  useInitialData();
-  useRealtimeSubscription();
+  const { activeBusinessId, activeBusiness } = useBusiness();
+  const { profile, reload } = useInitialData(activeBusinessId);
+  useRealtimeSubscription(activeBusinessId, reload);
+  const isWorker = profile?.role === "worker";
+
+  const navItems = useMemo(
+    () =>
+      isWorker
+        ? [
+            { href: "/clock", icon: Clock, label: "My Time" },
+            { href: "/hours", icon: BarChart3, label: "Hours" },
+            { href: "/dashboard/account", icon: User, label: "Account" },
+          ]
+        : [
+            { href: "/dashboard", icon: LayoutGrid, label: "Dashboard" },
+            { href: "/dashboard/clock", icon: Clock, label: "My Time" },
+            { href: "/dashboard/jobs", icon: Building2, label: "Jobs" },
+            { href: "/dashboard/employees", icon: Users, label: "Crew" },
+            { href: "/dashboard/reports", icon: BarChart3, label: "Hours" },
+            { href: "/dashboard/account", icon: User, label: "Account" },
+          ],
+    [isWorker]
+  );
+
+  const roleBadge = useMemo(() => {
+    if (profile?.role === "admin") return { full: "ADMIN", short: "ADM" };
+    if (profile?.role === "worker") return { full: "WORKER", short: "WRK" };
+    return { full: "MANAGER", short: "MGR" };
+  }, [profile?.role]);
 
   const handleLogout = async () => {
     await signOut();
@@ -41,7 +61,9 @@ export default function DashboardLayout({
   };
 
   const isActive = (href: string) =>
-    href === "/dashboard" ? pathname === href : pathname.startsWith(href);
+    href === "/dashboard"
+      ? pathname === href
+      : pathname === href || pathname.startsWith(`${href}/`);
 
   return (
     <div className="min-h-screen">
@@ -58,7 +80,17 @@ export default function DashboardLayout({
                 CrewClock
               </p>
               <p className="text-[10px] font-bold text-accent uppercase tracking-widest">
-                Manager
+                {roleBadge.full}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="px-3.5 py-3 border-b border-border">
+          <div className="rounded-lg border border-border bg-bg px-3 py-2.5">
+            <div className="min-w-0 flex items-center gap-2">
+              <Building2 size={16} className="text-text-muted shrink-0" />
+              <p className="min-w-0 truncate text-[17px] font-extrabold leading-tight text-text">
+                {activeBusiness?.name ?? "No business selected"}
               </p>
             </div>
           </div>
@@ -106,22 +138,32 @@ export default function DashboardLayout({
       </div>
 
       {/* ─── MOBILE TOP BAR (< lg) ─────────────────── */}
-      <div className="lg:hidden bg-gradient-to-br from-accent to-accent-dark px-4 py-3.5 flex justify-between items-center border-b-[3px] border-accent-dark">
-        <div className="flex items-center gap-2">
-          <HardHat size={20} className="text-bg" />
-          <span className="text-[17px] font-extrabold text-bg">CrewClock</span>
-          <span className="bg-bg text-accent text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-widest">
-            MGR
-          </span>
+      <div className="lg:hidden bg-gradient-to-br from-accent to-accent-dark border-b-[3px] border-accent-dark px-4 py-3.5">
+        <div className="flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <HardHat size={20} className="text-bg" />
+            <span className="text-[17px] font-extrabold text-bg">CrewClock</span>
+            <span className="bg-bg text-accent text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-widest">
+              {roleBadge.short}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <button
+              onClick={handleLogout}
+              className="text-bg/80 hover:text-bg p-1"
+            >
+              <LogOut size={18} />
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <ThemeToggle />
-          <button
-            onClick={handleLogout}
-            className="text-bg/80 hover:text-bg p-1"
-          >
-            <LogOut size={18} />
-          </button>
+        <div className="mt-2.5 rounded-lg border border-bg/30 bg-bg/10 px-3 py-2.5">
+          <div className="min-w-0 flex items-center gap-2">
+            <Building2 size={16} className="text-bg/85 shrink-0" />
+            <p className="min-w-0 truncate text-[17px] font-extrabold leading-tight text-bg">
+              {activeBusiness?.name ?? "No business selected"}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -151,5 +193,17 @@ export default function DashboardLayout({
         })}
       </div>
     </div>
+  );
+}
+
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <BusinessProvider>
+      <DashboardLayoutShell>{children}</DashboardLayoutShell>
+    </BusinessProvider>
   );
 }

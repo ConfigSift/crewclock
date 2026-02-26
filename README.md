@@ -41,7 +41,13 @@ Copy `.env.local.example` to `.env.local` and set:
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_...
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_PRICE_MONTHLY=price_monthly_id_here
+STRIPE_PRICE_ANNUAL=price_annual_id_here
 ```
 
 `SUPABASE_SERVICE_ROLE_KEY` must only be used on server routes/actions.
@@ -90,7 +96,13 @@ Open http://localhost:3000
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key |
 | `NEXT_PUBLIC_APP_URL` | Public app URL used for auth redirects (password reset) |
+| `NEXT_PUBLIC_SITE_URL` | Public app URL used for Stripe return URLs |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only service role key |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Stripe publishable key for embedded checkout |
+| `STRIPE_SECRET_KEY` | Stripe secret key for billing API routes |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret |
+| `STRIPE_PRICE_MONTHLY` | Stripe Price ID for monthly subscription |
+| `STRIPE_PRICE_ANNUAL` | Stripe Price ID for annual subscription |
 | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | Optional maps/geocoding key |
 
 ## Database RPCs Used by App

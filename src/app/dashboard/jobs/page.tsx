@@ -30,6 +30,7 @@ import {
 } from "@/lib/utils";
 import { loadGooglePlaces } from "@/lib/google-places";
 import type { Project } from "@/types/database";
+import { useBusiness } from "@/contexts/BusinessContext";
 
 // ─── Modal Wrapper ───────────────────────────────────
 function Modal({
@@ -81,6 +82,7 @@ function JobForm({
 }) {
   const profile = useAppStore((s) => s.profile);
   const { addProject, updateProject: storeUpdate } = useAppStore();
+  const { activeBusinessId } = useBusiness();
 
   const [form, setForm] = useState({
     name: "",
@@ -227,8 +229,14 @@ function JobForm({
       }
       if (result.project) storeUpdate(job.id, result.project);
     } else {
+      if (!activeBusinessId) {
+        setErr("Select a business before creating a job.");
+        setSaving(false);
+        return;
+      }
       const result = await createProject({
         company_id: profile!.company_id,
+        business_id: activeBusinessId,
         name: form.name.trim(),
         address: form.address.trim(),
         lat: Number(form.lat),
@@ -443,6 +451,7 @@ function LiveElapsed({ clockIn }: { clockIn: string }) {
 
 // ─── MAIN PAGE ───────────────────────────────────────
 export default function JobsPage() {
+  const { activeBusinessId } = useBusiness();
   const {
     profile,
     projects,
@@ -503,7 +512,11 @@ export default function JobsPage() {
     });
 
     try {
-      const result = await managerClockOutEntry(employeeId, projectId);
+      const result = await managerClockOutEntry(
+        employeeId,
+        projectId,
+        activeBusinessId ?? undefined
+      );
 
       if (result.error) {
         const errorMessage = result.error || "Unable to clock out employee.";

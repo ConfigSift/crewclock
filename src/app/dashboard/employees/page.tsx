@@ -23,6 +23,7 @@ import {
 } from "@/lib/utils";
 import { generatePasscode, isValidPasscode } from "@/lib/staff-utils";
 import type { Profile, UserRole } from "@/types/database";
+import { useBusiness } from "@/contexts/BusinessContext";
 
 function LiveDot() {
   return (
@@ -93,6 +94,7 @@ const isAdminRole = (role?: string) => (role ?? "").toLowerCase() === "admin";
 
 export default function EmployeesPage() {
   const { profile, employees, projects, timeEntries, setEmployees } = useAppStore();
+  const { activeBusinessId } = useBusiness();
 
   const [period, setPeriod] = useState<Period>("week");
   const [search, setSearch] = useState("");
@@ -240,16 +242,33 @@ export default function EmployeesPage() {
   };
 
   const reloadEmployees = async () => {
-    if (!profile) return;
+    if (!profile || !activeBusinessId) {
+      setEmployees([]);
+      return;
+    }
 
     const supabase = createClient();
-    const { data } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("company_id", profile.company_id)
-      .order("first_name");
+    const { data: memberships } = await supabase
+      .from("business_memberships")
+      .select("profiles(*)")
+      .eq("business_id", activeBusinessId)
+      .eq("is_active", true);
 
-    setEmployees((data as Profile[]) || []);
+    const nextEmployees = (memberships ?? [])
+      .map(
+        (row) =>
+          (row as { profiles: Profile | Profile[] | null }).profiles ?? null
+      )
+      .flat()
+      .filter(Boolean) as Profile[];
+
+    setEmployees(
+      nextEmployees.sort((a, b) =>
+        `${a.first_name} ${a.last_name}`.localeCompare(
+          `${b.first_name} ${b.last_name}`
+        )
+      )
+    );
   };
 
   const copyPasscode = async () => {
@@ -285,31 +304,54 @@ export default function EmployeesPage() {
       return;
     }
 
+    if (!activeBusinessId) {
+      setError("Select a business before creating staff.");
+      return;
+    }
+
     setSaving(true);
 
-    const response = await fetch("/api/staff", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        first_name,
-        last_name,
-        phone,
-        role: form.role,
-        email: form.email.trim(),
-        passcode,
-      }),
-    });
+    const sendCreate = async (allowRoleUpgrade: boolean) => {
+      const response = await fetch("/api/staff", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          business_id: activeBusinessId,
+          first_name,
+          last_name,
+          phone,
+          role: form.role,
+          allowRoleUpgrade,
+        }),
+      });
 
-    const payload = (await response.json().catch(() => null)) as
-      | {
-          error?: string;
-          code?: string | null;
-          details?: string | null;
-          hint?: string | null;
-          passcode?: string;
-          staff?: Profile;
-        }
-      | null;
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            error?: string;
+            code?: string | null;
+            details?: string | null;
+            hint?: string | null;
+            created?: boolean;
+            attached?: boolean;
+            profile_id?: string;
+            role?: StaffRole;
+            passcode?: string;
+          }
+        | null;
+
+      return { response, payload };
+    };
+
+    let { response, payload } = await sendCreate(false);
+    if (
+      !response.ok &&
+      payload?.code === "ROLE_UPGRADE_CONFIRM_REQUIRED" &&
+      window.confirm(
+        "This phone already belongs to a worker. Promote to manager and continue?"
+      )
+    ) {
+      ({ response, payload } = await sendCreate(true));
+    }
 
     if (!response.ok) {
       setError(formatCreateStaffError(payload));
@@ -317,24 +359,18 @@ export default function EmployeesPage() {
       return;
     }
 
-    if (payload?.staff) {
-      setEmployees(
-        [...employees, payload.staff].sort((a, b) =>
-          `${a.first_name} ${a.last_name}`.localeCompare(
-            `${b.first_name} ${b.last_name}`
-          )
-        )
-      );
-    } else {
-      await reloadEmployees();
-    }
+    await reloadEmployees();
 
-    setPasscodeReveal({
-      kind: "created",
-      staffName: `${first_name} ${last_name}`,
-      phone: payload?.staff?.phone ?? phone,
-      passcode: payload?.passcode || passcode || generatePasscode(),
-    });
+    if (payload?.created && payload.passcode) {
+      setPasscodeReveal({
+        kind: "created",
+        staffName: `${first_name} ${last_name}`,
+        phone,
+        passcode: payload.passcode,
+      });
+    } else {
+      setPasscodeReveal(null);
+    }
 
     setShowAddStaff(false);
     setSaving(false);

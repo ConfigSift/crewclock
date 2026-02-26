@@ -5,6 +5,7 @@ import { buildRpcErrorPayload } from "@/lib/supabase/rpc-errors";
 type Body = {
   employee_id?: string;
   project_id?: string;
+  business_id?: string;
 };
 
 function jsonNoStore(payload: Record<string, unknown>, status: number) {
@@ -64,9 +65,26 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as Body;
   const employeeId = (body.employee_id ?? "").trim();
   const projectId = (body.project_id ?? "").trim();
+  const businessId = (body.business_id ?? "").trim();
 
   if (!employeeId || !projectId) {
     return jsonNoStore({ error: "employee_id and project_id are required." }, 400);
+  }
+
+  if (businessId) {
+    const { data: project } = await context.sessionClient
+      .from("projects")
+      .select("id")
+      .eq("id", projectId)
+      .eq("business_id", businessId)
+      .maybeSingle();
+
+    if (!project) {
+      return jsonNoStore(
+        { error: "Project not found in selected business." },
+        404
+      );
+    }
   }
 
   const { data, error } = await context.sessionClient.rpc("manager_clock_out_entry", {

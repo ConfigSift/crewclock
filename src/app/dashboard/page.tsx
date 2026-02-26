@@ -38,15 +38,21 @@ function StatCard({
 }
 
 export default function DashboardPage() {
-  const { employees, projects, timeEntries, activeSessions, activeEntry } =
+  const { profile, projects, activeEntry, employees, timeEntries, activeSessions } =
     useAppStore();
 
   const weekSeconds = calcTotalSeconds(timeEntries, "week");
   const activeProjectIds = [
     ...new Set(activeSessions.map((s) => s.project_id)),
   ];
-  const myActiveProject = activeEntry
-    ? projects.find((project) => project.id === activeEntry.project_id)
+  const isManagerOrAdmin =
+    profile?.role === "manager" || profile?.role === "admin";
+  const myActiveEntry =
+    isManagerOrAdmin && activeEntry && activeEntry.employee_id === profile?.id
+      ? activeEntry
+      : null;
+  const myActiveProject = myActiveEntry
+    ? projects.find((project) => project.id === myActiveEntry.project_id)
     : null;
 
   return (
@@ -54,6 +60,27 @@ export default function DashboardPage() {
       <h1 className="text-[22px] font-extrabold tracking-tight mb-5">
         Dashboard
       </h1>
+
+      {myActiveEntry && (
+        <div className="bg-card rounded-2xl border border-border p-4 mb-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-extrabold text-green">Clocked In</p>
+              <p className="text-xs text-text-muted mt-1">
+                {myActiveProject
+                  ? `${myActiveProject.name} since ${formatTime(myActiveEntry.clock_in)}`
+                  : `Since ${formatTime(myActiveEntry.clock_in)}`}
+              </p>
+            </div>
+            <Link
+              href="/dashboard/clock"
+              className="inline-flex items-center justify-center px-3.5 py-2 bg-gradient-to-br from-accent to-accent-dark rounded-lg text-bg text-xs font-extrabold shadow-[0_4px_20px_var(--color-accent-glow)] hover:-translate-y-0.5 transition-all"
+            >
+              Open Clock
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
@@ -69,32 +96,6 @@ export default function DashboardPage() {
           color="var(--color-accent)"
         />
         <StatCard value={activeProjectIds.length} label="Active Sites" />
-      </div>
-
-      <h2 className="text-base font-bold mb-3">My Time</h2>
-      <div className="bg-card rounded-2xl border border-border p-4 mb-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p
-              className={`text-sm font-extrabold ${
-                activeEntry ? "text-green" : "text-text"
-              }`}
-            >
-              {activeEntry ? "Clocked In" : "Not Clocked In"}
-            </p>
-            <p className="text-xs text-text-muted mt-1">
-              {activeEntry && myActiveProject
-                ? `${myActiveProject.name} since ${formatTime(activeEntry.clock_in)}`
-                : "Start or end your own shift from My Time."}
-            </p>
-          </div>
-          <Link
-            href="/dashboard/clock"
-            className="inline-flex items-center justify-center px-3.5 py-2 bg-gradient-to-br from-accent to-accent-dark rounded-lg text-bg text-xs font-extrabold shadow-[0_4px_20px_var(--color-accent-glow)] hover:-translate-y-0.5 transition-all"
-          >
-            Open Clock
-          </Link>
-        </div>
       </div>
 
       {/* Live on Site */}

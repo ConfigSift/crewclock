@@ -63,7 +63,8 @@ export async function clockOut(
 
 export async function managerClockOutEntry(
   employeeId: string,
-  projectId: string
+  projectId: string,
+  businessId?: string
 ): Promise<ManagerClockOutResponse> {
   try {
     const response = await fetch("/api/time-entries/manager-clock-out", {
@@ -74,6 +75,7 @@ export async function managerClockOutEntry(
       body: JSON.stringify({
         employee_id: employeeId,
         project_id: projectId,
+        business_id: businessId ?? null,
       }),
     });
 

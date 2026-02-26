@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { HardHat, Eye, EyeOff, KeyRound } from "lucide-react";
 import { signIn } from "@/lib/actions";
 import { isValidPasscode } from "@/lib/staff-utils";
 import ThemeToggle from "@/components/ThemeToggle";
 import { createClient } from "@/lib/supabase/client";
+import { getPostLoginPath, logPostLoginRedirect } from "@/lib/auth/post-login";
 
 type LoginMode = "admin" | "employee";
 
@@ -29,6 +31,7 @@ function formatApiError(
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
   const [mode, setMode] = useState<LoginMode>("admin");
   const [loading, setLoading] = useState(false);
@@ -39,9 +42,56 @@ export default function LoginPage() {
   const [resetLoading, setResetLoading] = useState(false);
   const [resetError, setResetError] = useState("");
   const [resetSuccess, setResetSuccess] = useState("");
+  const callbackError = searchParams.get("error")?.trim() ?? "";
 
   const [adminForm, setAdminForm] = useState({ email: "", password: "" });
   const [employeeForm, setEmployeeForm] = useState({ phone: "", passcode: "" });
+
+  const resolvePostLoginPath = async (): Promise<string> => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) return "/";
+
+    const withOnboarding = await supabase
+      .from("profiles")
+      .select("role, onboarding_step_completed")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    let role: "admin" | "manager" | "worker" | null = null;
+    let onboardingStepCompleted: number | null = null;
+
+    if (!withOnboarding.error && withOnboarding.data) {
+      const profile = withOnboarding.data as {
+        role?: "admin" | "manager" | "worker" | null;
+        onboarding_step_completed?: number | null;
+      };
+      role = profile.role ?? null;
+      onboardingStepCompleted = profile.onboarding_step_completed ?? null;
+    } else {
+      const fallback = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (fallback.data) {
+        role =
+          (fallback.data as { role?: "admin" | "manager" | "worker" | null }).role ??
+          null;
+      }
+    }
+
+    if (role === "admin" && (onboardingStepCompleted ?? 0) < 3) {
+      return "/onboarding/step-1";
+    }
+
+    const destination = getPostLoginPath(role);
+    logPostLoginRedirect("login-submit", role, destination);
+    return destination;
+  };
 
   const handleAdminSignIn = async (): Promise<boolean> => {
     const email = adminForm.email.trim();
@@ -105,7 +155,8 @@ export default function LoginPage() {
           : await handleEmployeeSignIn();
 
       if (success) {
-        router.push("/");
+        const destination = await resolvePostLoginPath();
+        router.replace(destination);
         router.refresh();
       }
     } catch (err: unknown) {
@@ -302,6 +353,11 @@ export default function LoginPage() {
               {error}
             </p>
           )}
+          {callbackError && !error && (
+            <p className="text-red text-sm font-semibold mb-3 rounded-lg border border-red-border bg-red-dark px-3 py-2">
+              {callbackError}
+            </p>
+          )}
 
           <button
             type="submit"
@@ -311,6 +367,12 @@ export default function LoginPage() {
             {loading ? "Please wait..." : "Sign In"}
           </button>
         </form>
+        <p className="text-xs text-text-muted mt-4 text-center">
+          Need an admin account?{" "}
+          <Link href="/signup" className="text-accent font-semibold hover:underline">
+            Sign up
+          </Link>
+        </p>
       </div>
 
       {showForgotPassword && (

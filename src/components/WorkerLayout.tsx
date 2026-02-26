@@ -1,19 +1,21 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { HardHat, Clock, BarChart3, LogOut } from "lucide-react";
+import { HardHat, Clock, BarChart3, LogOut, User } from "lucide-react";
 import { signOut } from "@/lib/actions";
 import { useInitialData } from "@/hooks/use-data";
 import ThemeToggle from "@/components/ThemeToggle";
+import { BusinessProvider, useBusiness } from "@/contexts/BusinessContext";
 
-export default function WorkerLayout({
+function WorkerLayoutShell({
   children,
 }: {
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  useInitialData();
+  const { activeBusinessId } = useBusiness();
+  useInitialData(activeBusinessId);
 
   const handleLogout = async () => {
     await signOut();
@@ -24,6 +26,7 @@ export default function WorkerLayout({
   const navItems = [
     { href: "/clock", icon: Clock, label: "Clock In/Out" },
     { href: "/hours", icon: BarChart3, label: "My Hours" },
+    { href: "/dashboard/account", icon: User, label: "Account" },
   ];
 
   return (
@@ -51,7 +54,7 @@ export default function WorkerLayout({
       {/* Bottom Nav */}
       <div className="fixed bottom-0 left-0 right-0 max-w-[520px] mx-auto flex border-t border-border bg-surface z-50">
         {navItems.map((item) => {
-          const active = pathname === item.href;
+          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
           return (
             <button
               key={item.href}
@@ -67,5 +70,17 @@ export default function WorkerLayout({
         })}
       </div>
     </div>
+  );
+}
+
+export default function WorkerLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <BusinessProvider>
+      <WorkerLayoutShell>{children}</WorkerLayoutShell>
+    </BusinessProvider>
   );
 }
