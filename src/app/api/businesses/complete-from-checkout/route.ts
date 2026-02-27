@@ -16,6 +16,14 @@ type ActorProfile = {
   is_active: boolean;
 };
 
+type ExistingBusinessBySubscription = {
+  id: string;
+  name: string;
+  account_id: string;
+  billing_started_at: string | null;
+  billing_canceled_at: string | null;
+};
+
 function jsonNoStore(payload: Record<string, unknown>, status: number) {
   return NextResponse.json(payload, {
     status,
@@ -116,18 +124,16 @@ export async function POST(request: Request) {
     const actorAccountId = actorProfile.account_id ?? actorProfile.company_id;
     const admin = createAdminClient();
 
-    let subscription: Stripe.Subscription | null = null;
-    if (typeof checkoutSession.subscription === "string") {
-      subscription = await stripe.subscriptions.retrieve(checkoutSession.subscription, {
-        expand: ["items.data.price"],
-      });
-    } else if (checkoutSession.subscription) {
-      subscription = checkoutSession.subscription as Stripe.Subscription;
-    }
-
-    if (!subscription) {
+    const subscriptionId =
+      typeof checkoutSession.subscription === "string"
+        ? checkoutSession.subscription
+        : checkoutSession.subscription?.id ?? null;
+    if (!subscriptionId) {
       return jsonNoStore({ error: "Checkout session has no subscription object." }, 400);
     }
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ["items.data.price"],
+    });
 
     const sub = subscription as Stripe.Subscription & {
       current_period_start?: number | null;
@@ -148,30 +154,81 @@ export async function POST(request: Request) {
       typeof checkoutSession.customer === "string"
         ? checkoutSession.customer
         : checkoutSession.customer?.id ?? null;
+    const nowIso = new Date().toISOString();
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[billing] complete-from-checkout subscription sync", {
+        checkout_session_id: checkoutSessionId,
+        subscription_id: sub.id,
+        subscription_status: sub.status,
+        current_period_end_unix: currentPeriodEndUnix,
+        current_period_end_iso: currentPeriodEnd,
+      });
+    }
 
     const { data: existingBySubscription } = await admin
       .from("businesses")
       .select(
-        "id, name, account_id, billing_status, stripe_price_id, stripe_subscription_id, cancel_at_period_end, current_period_start, current_period_end"
+        "id, name, account_id, billing_started_at, billing_canceled_at"
       )
       .eq("account_id", actorAccountId)
       .eq("stripe_subscription_id", sub.id)
       .maybeSingle();
 
     if (existingBySubscription) {
+      const existingRow = existingBySubscription as ExistingBusinessBySubscription;
+      const updatePayload: Record<string, unknown> = {
+        billing_status: billingStatus,
+        stripe_customer_id: stripeCustomerId,
+        stripe_subscription_id: sub.id,
+        stripe_price_id: stripePriceId,
+        cancel_at_period_end: cancelAtPeriodEnd,
+        current_period_start: currentPeriodStart,
+        current_period_end: currentPeriodEnd,
+        billing_started_at: existingRow.billing_started_at ?? nowIso,
+      };
+
+      if (
+        (billingStatus === "canceled" || billingStatus === "unpaid") &&
+        !existingRow.billing_canceled_at
+      ) {
+        updatePayload.billing_canceled_at = nowIso;
+      }
+
+      const { data: refreshedExisting, error: refreshedExistingError } = await admin
+        .from("businesses")
+        .update(updatePayload)
+        .eq("id", existingRow.id)
+        .select(
+          "id, name, billing_status, stripe_price_id, stripe_subscription_id, cancel_at_period_end, current_period_start, current_period_end"
+        )
+        .single();
+
+      if (refreshedExistingError || !refreshedExisting) {
+        return jsonNoStore(
+          {
+            error: "Unable to sync existing business billing fields.",
+            code: refreshedExistingError?.code ?? null,
+            details: refreshedExistingError?.details ?? null,
+            hint: refreshedExistingError?.hint ?? null,
+          },
+          400
+        );
+      }
+
       return jsonNoStore(
         {
           business: {
-            id: existingBySubscription.id,
-            name: existingBySubscription.name,
+            id: refreshedExisting.id,
+            name: refreshedExisting.name,
           },
           billing: {
-            billing_status: existingBySubscription.billing_status,
-            stripe_price_id: existingBySubscription.stripe_price_id,
-            stripe_subscription_id: existingBySubscription.stripe_subscription_id,
-            cancel_at_period_end: existingBySubscription.cancel_at_period_end,
-            current_period_start: existingBySubscription.current_period_start,
-            current_period_end: existingBySubscription.current_period_end,
+            billing_status: refreshedExisting.billing_status,
+            stripe_price_id: refreshedExisting.stripe_price_id,
+            stripe_subscription_id: refreshedExisting.stripe_subscription_id,
+            cancel_at_period_end: refreshedExisting.cancel_at_period_end,
+            current_period_start: refreshedExisting.current_period_start,
+            current_period_end: refreshedExisting.current_period_end,
           },
         },
         200
@@ -192,7 +249,6 @@ export async function POST(request: Request) {
       return jsonNoStore({ error: "A business with that name already exists." }, 409);
     }
 
-    const nowIso = new Date().toISOString();
     const { data: createdBusiness, error: createdBusinessError } = await admin
       .from("businesses")
       .insert({
