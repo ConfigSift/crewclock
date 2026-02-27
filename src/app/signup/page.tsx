@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { HardHat, Eye, EyeOff } from "lucide-react";
-import ThemeToggle from "@/components/ThemeToggle";
+import { Eye, EyeOff } from "lucide-react";
+import AuthShell from "@/components/auth/AuthShell";
 import { createClient } from "@/lib/supabase/client";
 
 function resolveSiteUrl(): string {
@@ -92,29 +92,22 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-center px-6 max-w-[440px] mx-auto">
-      <div className="flex justify-end mb-3">
-        <ThemeToggle />
-      </div>
-
-      <div className="text-center mb-10">
-        <div className="inline-flex items-center justify-center w-[68px] h-[68px] bg-gradient-to-br from-accent to-accent-dark rounded-2xl mb-4 shadow-[0_8px_40px_var(--color-accent-glow)]">
-          <HardHat size={34} className="text-bg" />
+    <AuthShell pageLabel="Create account">
+      <div className="rounded-3xl border border-border bg-card px-5 py-6 shadow-[0_18px_46px_rgba(52,38,18,0.12)] sm:px-7 sm:py-7">
+        <div className="mb-6">
+          <h2 className="text-[29px] font-black tracking-tight text-text">Create account</h2>
+          <p className="mt-1 text-sm font-medium text-text-muted">
+            Set up your admin account and continue onboarding.
+          </p>
         </div>
-        <h1 className="text-[32px] font-black tracking-tight text-text">CrewClock</h1>
-        <p className="text-sm text-text-muted mt-1 font-medium">
-          Create your admin account
-        </p>
-      </div>
 
-      <div className="bg-card rounded-2xl border border-border p-6">
         <form onSubmit={handleSignup}>
-          <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
+          <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest text-text-muted">
             Email
           </label>
           <input
             type="email"
-            className="w-full p-3 bg-bg border border-border rounded-lg text-text text-sm font-sans mb-3.5 focus:border-accent outline-none"
+            className="mb-3.5 w-full rounded-xl border border-border bg-bg p-3 text-sm text-text outline-none transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/25"
             placeholder="owner@company.com"
             value={form.email}
             onChange={(event) =>
@@ -123,13 +116,13 @@ export default function SignupPage() {
             required
           />
 
-          <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
+          <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest text-text-muted">
             Password
           </label>
           <div className="relative mb-3.5">
             <input
               type={showPassword ? "text" : "password"}
-              className="w-full p-3 pr-10 bg-bg border border-border rounded-lg text-text text-sm font-sans focus:border-accent outline-none"
+              className="w-full rounded-xl border border-border bg-bg p-3 pr-10 text-sm text-text outline-none transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/25"
               placeholder="Password"
               value={form.password}
               onChange={(event) =>
@@ -140,20 +133,20 @@ export default function SignupPage() {
             <button
               type="button"
               onClick={() => setShowPassword((prev) => !prev)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-dim hover:text-text-muted transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-dim transition-colors hover:text-text-muted"
               aria-label={showPassword ? "Hide password" : "Show password"}
             >
               {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>
 
-          <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
+          <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest text-text-muted">
             Confirm Password
           </label>
           <div className="relative mb-4">
             <input
               type={showConfirmPassword ? "text" : "password"}
-              className="w-full p-3 pr-10 bg-bg border border-border rounded-lg text-text text-sm font-sans focus:border-accent outline-none"
+              className="w-full rounded-xl border border-border bg-bg p-3 pr-10 text-sm text-text outline-none transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/25"
               placeholder="Confirm password"
               value={form.confirmPassword}
               onChange={(event) =>
@@ -167,21 +160,23 @@ export default function SignupPage() {
             <button
               type="button"
               onClick={() => setShowConfirmPassword((prev) => !prev)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-dim hover:text-text-muted transition-colors"
-              aria-label={showConfirmPassword ? "Hide password confirmation" : "Show password confirmation"}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-dim transition-colors hover:text-text-muted"
+              aria-label={
+                showConfirmPassword ? "Hide password confirmation" : "Show password confirmation"
+              }
             >
               {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>
 
           {error && (
-            <p className="text-red text-sm font-semibold mb-3 rounded-lg border border-red-border bg-red-dark px-3 py-2">
+            <p className="mb-3 rounded-lg border border-red-border bg-red-dark px-3 py-2 text-sm font-semibold text-red">
               {error}
             </p>
           )}
 
           {success && (
-            <p className="text-green text-sm font-semibold mb-3 rounded-lg border border-green-border bg-green-dark px-3 py-2">
+            <p className="mb-3 rounded-lg border border-green-border bg-green-dark px-3 py-2 text-sm font-semibold text-green">
               {success}
             </p>
           )}
@@ -189,19 +184,19 @@ export default function SignupPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full p-3.5 bg-gradient-to-br from-accent to-accent-dark rounded-xl text-bg text-[15px] font-extrabold cursor-pointer shadow-[0_4px_20px_var(--color-accent-glow)] hover:shadow-[0_6px_28px_var(--color-accent-glow)] hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full cursor-pointer rounded-xl bg-gradient-to-br from-accent to-accent-dark p-3.5 text-[15px] font-extrabold text-bg shadow-[0_4px_20px_var(--color-accent-glow)] transition-all hover:-translate-y-0.5 hover:shadow-[0_6px_28px_var(--color-accent-glow)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? "Creating account..." : "Sign Up"}
           </button>
         </form>
 
-        <p className="text-xs text-text-muted mt-4 text-center">
+        <p className="mt-4 text-center text-xs text-text-muted">
           Already have an account?{" "}
-          <Link href="/login" className="text-accent font-semibold hover:underline">
+          <Link href="/login" className="font-semibold text-accent hover:underline">
             Sign in
           </Link>
         </p>
       </div>
-    </div>
+    </AuthShell>
   );
 }

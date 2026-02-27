@@ -168,9 +168,10 @@ export async function createEmbeddedSubscriptionCheckoutSession(input: {
   form.set("client_reference_id", input.businessId);
   form.set("line_items[0][price]", input.priceId);
   form.set("line_items[0][quantity]", "1");
-  form.set("allow_promotion_codes", "true");
   if (input.promotionCodeId) {
     form.set("discounts[0][promotion_code]", input.promotionCodeId);
+  } else {
+    form.set("allow_promotion_codes", "true");
   }
   form.set("metadata[business_id]", input.businessId);
   form.set("metadata[account_id]", input.accountId);

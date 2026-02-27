@@ -12,14 +12,15 @@ type SubscriptionCardProps = {
 
 type BusinessBillingSnapshot = {
   id: string;
+  business_id?: string;
   name?: string | null;
   billing_status: BillingStatus;
   plan_label: string;
   stripe_price_id: string | null;
   stripe_subscription_id: string | null;
   cancel_at_period_end: boolean;
-  current_period_start: string | null;
-  current_period_end: string | null;
+  current_period_start: string | number | null;
+  current_period_end: string | number | null;
   billing_started_at: string | null;
   billing_canceled_at: string | null;
 };
@@ -28,8 +29,8 @@ type BillingActionPayload = {
   ok?: boolean;
   error?: string;
   cancel_at_period_end?: boolean;
-  current_period_end?: string | null;
-  current_period_start?: string | null;
+  current_period_end?: string | number | null;
+  current_period_start?: string | number | null;
   billing_status?: BillingStatus;
 };
 
@@ -47,11 +48,11 @@ function statusBadgeClass(status: BillingStatus): string {
   return "text-text-muted border-border bg-bg";
 }
 
-function formatDate(value: string | null): string | null {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleDateString("en-US", {
+function formatDate(value: string | number | null | undefined): string {
+  if (!value) return "";
+  const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -111,6 +112,17 @@ export default function SubscriptionCard({
       return typed;
     },
     [isDev]
+  );
+
+  const refreshSubscription = useCallback(
+    async (targetBusinessId: string): Promise<BusinessBillingSnapshot | null> => {
+      const fetched = await fetchSubscription(targetBusinessId);
+      if (!fetched) return null;
+      setSnapshot(fetched);
+      setError("");
+      return fetched;
+    },
+    [fetchSubscription]
   );
 
   const showTimedActionError = useCallback((message: string) => {
@@ -178,10 +190,6 @@ export default function SubscriptionCard({
   }, [businessId, fetchSubscription, isDev, selectedBusinessName]);
 
   const planLabel = useMemo(() => snapshot?.plan_label ?? "Not selected", [snapshot?.plan_label]);
-  const periodEnd = useMemo(
-    () => formatDate(snapshot?.current_period_end ?? null),
-    [snapshot?.current_period_end]
-  );
   const startedAt = useMemo(
     () => formatDate(snapshot?.billing_started_at ?? null),
     [snapshot?.billing_started_at]
@@ -195,19 +203,23 @@ export default function SubscriptionCard({
     [snapshot]
   );
   const autoRenewIsOff = snapshot?.cancel_at_period_end ?? false;
-  const renewalLabel = autoRenewIsOff ? "Access ends on" : "Renews on";
+  const periodEndRaw = snapshot?.current_period_end ?? null;
+  const dateLabel = autoRenewIsOff ? "Access ends on" : "Renews on";
+  const dateValue = formatDate(periodEndRaw);
+  const isActiveOrTrialing =
+    snapshot?.billing_status === "active" || snapshot?.billing_status === "trialing";
   const canManageAutoRenew =
     canManageBilling &&
-    (snapshot?.billing_status === "active" || snapshot?.billing_status === "trialing") &&
+    isActiveOrTrialing &&
     Boolean(snapshot?.stripe_subscription_id);
 
   useEffect(() => {
     if (!snapshot?.stripe_subscription_id) return;
-    if (periodEnd) return;
+    if (dateValue) return;
     if (isDev) {
       console.warn("[subscription] current_period_end is missing for active subscription", snapshot);
     }
-  }, [isDev, periodEnd, snapshot]);
+  }, [dateValue, isDev, snapshot]);
 
   const handleToggleAutoRenew = async (cancelAtPeriodEnd: boolean) => {
     if (!businessId) {
@@ -297,10 +309,7 @@ export default function SubscriptionCard({
             }`
       );
 
-      const refreshed = await fetchSubscription(businessId);
-      if (refreshed) {
-        setSnapshot((current) => ({ ...(current ?? refreshed), ...refreshed }));
-      }
+      await refreshSubscription(businessId);
     } catch {
       showTimedActionError("Unable to update renewal settings.");
     } finally {
@@ -348,8 +357,8 @@ export default function SubscriptionCard({
             </div>
 
             <div className="flex items-center justify-between gap-3 pt-1">
-              <span className="text-text-muted">{renewalLabel}</span>
-              <span className="font-semibold text-text">{periodEnd ?? "--"}</span>
+              <span className="text-text-muted">{dateLabel}</span>
+              <span className="font-semibold text-text">{dateValue}</span>
             </div>
 
             <div className="flex items-center justify-between gap-3 pt-1">

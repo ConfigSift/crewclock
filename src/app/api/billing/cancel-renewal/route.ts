@@ -138,6 +138,9 @@ export async function POST(request: Request) {
     return jsonNoStore(
       {
         ok: true,
+        business_id: businessRow.id,
+        stripe_subscription_id: subscription.id,
+        stripe_price_id: priceId,
         cancel_at_period_end: Boolean(subscription.cancel_at_period_end),
         current_period_end: currentPeriodEnd,
         current_period_start: currentPeriodStart,
