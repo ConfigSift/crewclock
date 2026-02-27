@@ -101,6 +101,23 @@ export async function POST(request: Request) {
 
     const priceId = getStripePriceId(plan);
     const siteUrl = getSiteUrl();
+    const firstMonthPromoCodeId =
+      process.env.STRIPE_PROMO_FIRSTMONTH1?.trim() ?? "";
+    const shouldApplyFirstMonthDiscount = plan === "monthly";
+
+    if (shouldApplyFirstMonthDiscount && !firstMonthPromoCodeId) {
+      return jsonNoStore(
+        { error: "Missing STRIPE_PROMO_FIRSTMONTH1 configuration." },
+        500
+      );
+    }
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[billing] checkout session", {
+        plan,
+        discountApplied: shouldApplyFirstMonthDiscount,
+      });
+    }
 
     let customerId = businessRow.stripe_customer_id;
     if (!customerId) {
@@ -127,6 +144,9 @@ export async function POST(request: Request) {
       plan,
       priceId,
       returnUrl: `${siteUrl}/onboarding/step-3?session_id={CHECKOUT_SESSION_ID}`,
+      promotionCodeId: shouldApplyFirstMonthDiscount
+        ? firstMonthPromoCodeId
+        : undefined,
     });
 
     if (!session.client_secret) {

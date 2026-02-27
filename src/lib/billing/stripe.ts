@@ -158,6 +158,7 @@ export async function createEmbeddedSubscriptionCheckoutSession(input: {
   plan: BillingPlan;
   priceId: string;
   returnUrl: string;
+  promotionCodeId?: string;
 }): Promise<StripeCheckoutSession> {
   const form = new URLSearchParams();
   form.set("mode", "subscription");
@@ -168,6 +169,9 @@ export async function createEmbeddedSubscriptionCheckoutSession(input: {
   form.set("line_items[0][price]", input.priceId);
   form.set("line_items[0][quantity]", "1");
   form.set("allow_promotion_codes", "true");
+  if (input.promotionCodeId) {
+    form.set("discounts[0][promotion_code]", input.promotionCodeId);
+  }
   form.set("metadata[business_id]", input.businessId);
   form.set("metadata[account_id]", input.accountId);
   form.set("metadata[profile_id]", input.profileId);
