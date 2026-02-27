@@ -12,6 +12,7 @@ import {
 type RequestBody = {
   business_id?: string;
   plan?: BillingPlan;
+  return_path?: string;
 };
 
 type ActorProfile = {
@@ -71,6 +72,7 @@ export async function POST(request: Request) {
     const body = (await request.json().catch(() => ({}))) as RequestBody;
     const businessId = (body.business_id ?? "").trim();
     const plan = body.plan;
+    const requestedReturnPath = (body.return_path ?? "/onboarding/step-3").trim();
 
     if (!businessId) {
       return jsonNoStore({ error: "business_id is required." }, 400);
@@ -101,6 +103,11 @@ export async function POST(request: Request) {
 
     const priceId = getStripePriceId(plan);
     const siteUrl = getSiteUrl();
+    const normalizedReturnPath = requestedReturnPath.startsWith("/")
+      ? requestedReturnPath
+      : "/onboarding/step-3";
+    const returnUrl = new URL(normalizedReturnPath, `${siteUrl}/`);
+    returnUrl.searchParams.set("session_id", "{CHECKOUT_SESSION_ID}");
     const firstMonthPromoCodeId =
       process.env.STRIPE_PROMO_FIRSTMONTH1?.trim() ?? "";
     const shouldApplyFirstMonthDiscount = plan === "monthly";
@@ -143,7 +150,7 @@ export async function POST(request: Request) {
       profileId: actorProfile.id,
       plan,
       priceId,
-      returnUrl: `${siteUrl}/onboarding/step-3?session_id={CHECKOUT_SESSION_ID}`,
+      returnUrl: returnUrl.toString(),
       promotionCodeId: shouldApplyFirstMonthDiscount
         ? firstMonthPromoCodeId
         : undefined,

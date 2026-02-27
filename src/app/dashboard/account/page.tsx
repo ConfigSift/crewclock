@@ -31,6 +31,11 @@ export default function AccountPage() {
   const [deleteError, setDeleteError] = useState("");
   const [deleteSuccess, setDeleteSuccess] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [billingFlowMessage, setBillingFlowMessage] = useState<{
+    tone: "success" | "warning";
+    text: string;
+  } | null>(null);
+  const [subscriptionRefreshToken, setSubscriptionRefreshToken] = useState(0);
 
   const badgeClass = useMemo(() => {
     if (profile?.role === "admin") {
@@ -137,6 +142,24 @@ export default function AccountPage() {
         </div>
       )}
 
+      {billingFlowMessage && (
+        <div
+          className={`mb-4 rounded-xl px-4 py-3 ${
+            billingFlowMessage.tone === "success"
+              ? "border border-green-border bg-green-dark"
+              : "border border-accent/30 bg-accent/[0.09]"
+          }`}
+        >
+          <p
+            className={`text-[12px] font-semibold ${
+              billingFlowMessage.tone === "success" ? "text-green" : "text-accent"
+            }`}
+          >
+            {billingFlowMessage.text}
+          </p>
+        </div>
+      )}
+
       {shouldPromptSelection && (
         <div className="mb-4 rounded-xl border border-accent/30 bg-accent/[0.09] px-4 py-3">
           <p className="text-[12px] text-accent font-semibold">
@@ -171,13 +194,29 @@ export default function AccountPage() {
         <p className="text-[11px] font-bold text-text-muted uppercase tracking-widest mb-3">
           Current Business
         </p>
-        <BusinessSwitcher />
+        <BusinessSwitcher
+          onCheckoutSuccess={(business) => {
+            setBillingFlowMessage({
+              tone: "success",
+              text: `Subscription active for ${business.name}.`,
+            });
+            setSubscriptionRefreshToken((current) => current + 1);
+          }}
+          onCheckoutCanceled={(business) => {
+            setBillingFlowMessage({
+              tone: "warning",
+              text: `${business.name} created. Subscription required to use this business.`,
+            });
+            setSubscriptionRefreshToken((current) => current + 1);
+          }}
+        />
       </div>
 
       <SubscriptionCard
         businessId={activeBusinessId}
         selectedBusinessName={activeBusiness?.name ?? null}
         canManageBilling={profile?.role === "admin"}
+        refreshToken={subscriptionRefreshToken}
       />
 
       <button

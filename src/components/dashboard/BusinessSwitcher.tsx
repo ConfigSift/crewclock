@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useBusiness } from "@/contexts/BusinessContext";
 import { useAppStore } from "@/lib/store";
+import EmbeddedCheckoutModal from "@/components/billing/EmbeddedCheckoutModal";
 
 const emptyCreateForm = {
   name: "",
@@ -20,7 +21,17 @@ const emptyCreateForm = {
   country: "",
 };
 
-export default function BusinessSwitcher({ mobile = false }: { mobile?: boolean }) {
+type BusinessSwitcherProps = {
+  mobile?: boolean;
+  onCheckoutSuccess?: (business: { id: string; name: string }) => void;
+  onCheckoutCanceled?: (business: { id: string; name: string }) => void;
+};
+
+export default function BusinessSwitcher({
+  mobile = false,
+  onCheckoutSuccess,
+  onCheckoutCanceled,
+}: BusinessSwitcherProps) {
   const profile = useAppStore((s) => s.profile);
   const {
     businesses,
@@ -28,12 +39,19 @@ export default function BusinessSwitcher({ mobile = false }: { mobile?: boolean 
     setActiveBusinessId,
     loading,
     createBusiness,
+    refreshBusinesses,
   } = useBusiness();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createForm, setCreateForm] = useState(emptyCreateForm);
   const [createError, setCreateError] = useState("");
   const [creating, setCreating] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [billingWarning, setBillingWarning] = useState<string | null>(null);
+  const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
+  const [checkoutBusiness, setCheckoutBusiness] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   const isAdmin = profile?.role === "admin";
 
@@ -67,10 +85,16 @@ export default function BusinessSwitcher({ mobile = false }: { mobile?: boolean 
       return;
     }
 
+    if (result.business) {
+      setCheckoutBusiness(result.business);
+      setCheckoutModalOpen(true);
+      setBillingWarning(null);
+    }
+
     setShowCreateModal(false);
     setCreateForm(emptyCreateForm);
     setCreating(false);
-    setToastMessage("Business created");
+    setToastMessage("Business created. Complete billing setup.");
   };
 
   const labelClass = mobile
@@ -129,6 +153,12 @@ export default function BusinessSwitcher({ mobile = false }: { mobile?: boolean 
           >
             <Plus size={13} /> New Business
           </button>
+        )}
+
+        {billingWarning && (
+          <p className="mt-2 text-[12px] font-semibold text-accent rounded-lg border border-accent/30 bg-accent/[0.09] px-3 py-2">
+            {billingWarning}
+          </p>
         )}
       </div>
 
@@ -293,6 +323,33 @@ export default function BusinessSwitcher({ mobile = false }: { mobile?: boolean 
           </div>
         </div>
       )}
+
+      <EmbeddedCheckoutModal
+        open={checkoutModalOpen}
+        businessId={checkoutBusiness?.id ?? null}
+        businessName={checkoutBusiness?.name ?? null}
+        returnPath="/dashboard/account"
+        onClose={() => {
+          setCheckoutModalOpen(false);
+        }}
+        onCancel={() => {
+          if (!checkoutBusiness) return;
+          setActiveBusinessId(checkoutBusiness.id);
+          void refreshBusinesses();
+          setBillingWarning(
+            `${checkoutBusiness.name} created. Subscription required to use this business.`
+          );
+          onCheckoutCanceled?.(checkoutBusiness);
+        }}
+        onSuccess={async () => {
+          if (!checkoutBusiness) return;
+          await refreshBusinesses();
+          setActiveBusinessId(checkoutBusiness.id);
+          setBillingWarning(null);
+          setToastMessage(`Subscription active for ${checkoutBusiness.name}`);
+          onCheckoutSuccess?.(checkoutBusiness);
+        }}
+      />
     </>
   );
 }

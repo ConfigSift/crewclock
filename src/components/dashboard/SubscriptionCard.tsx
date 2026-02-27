@@ -8,6 +8,7 @@ type SubscriptionCardProps = {
   businessId: string | null;
   selectedBusinessName?: string | null;
   canManageBilling?: boolean;
+  refreshToken?: number;
 };
 
 type BusinessBillingSnapshot = {
@@ -63,6 +64,7 @@ export default function SubscriptionCard({
   businessId,
   selectedBusinessName,
   canManageBilling = false,
+  refreshToken = 0,
 }: SubscriptionCardProps) {
   const [snapshot, setSnapshot] = useState<BusinessBillingSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
@@ -187,7 +189,7 @@ export default function SubscriptionCard({
     return () => {
       active = false;
     };
-  }, [businessId, fetchSubscription, isDev, selectedBusinessName]);
+  }, [businessId, fetchSubscription, isDev, refreshToken, selectedBusinessName]);
 
   const planLabel = useMemo(() => snapshot?.plan_label ?? "Not selected", [snapshot?.plan_label]);
   const startedAt = useMemo(
