@@ -11,8 +11,20 @@ type BillingStatus =
   | "canceled"
   | "unpaid"
   | null;
+type CheckoutIntent = "existing_business" | "new_business";
+
+type BusinessDraft = {
+  name: string;
+  address_line1?: string;
+  city?: string;
+  state?: string;
+  postal_code?: string;
+  country?: string;
+};
 
 type CreateCheckoutPayload = {
+  client_secret?: string;
+  checkout_session_id?: string;
   clientSecret?: string;
   sessionId?: string;
   error?: string;
@@ -41,12 +53,14 @@ type StripeConstructor = (publishableKey: string) => StripeClient;
 
 type EmbeddedCheckoutModalProps = {
   open: boolean;
-  businessId: string | null;
+  intent?: CheckoutIntent;
+  businessId?: string | null;
   businessName?: string | null;
+  businessDraft?: BusinessDraft | null;
   onClose: () => void;
   onCancel?: () => void;
   onSuccess?: (payload: {
-    businessId: string;
+    businessId: string | null;
     businessName?: string | null;
     billingStatus: BillingStatus;
     sessionId: string;
@@ -186,8 +200,10 @@ function EmbeddedCheckoutMount({
 
 export default function EmbeddedCheckoutModal({
   open,
-  businessId,
+  intent = "existing_business",
+  businessId = null,
   businessName,
+  businessDraft = null,
   onClose,
   onCancel,
   onSuccess,
@@ -258,8 +274,12 @@ export default function EmbeddedCheckoutModal({
 
   const initializeCheckout = useCallback(async () => {
     if (!open) return;
-    if (!businessId) {
+    if (intent === "existing_business" && !businessId) {
       setError("No business selected for checkout.");
+      return;
+    }
+    if (intent === "new_business" && !businessDraft?.name?.trim()) {
+      setError("Business name is required before checkout.");
       return;
     }
     if (!publishableKey) {
@@ -278,7 +298,9 @@ export default function EmbeddedCheckoutModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          intent,
           business_id: businessId,
+          businessDraft,
           plan: selectedPlan,
           return_path: returnPath,
         }),
@@ -289,23 +311,34 @@ export default function EmbeddedCheckoutModal({
         | CreateCheckoutPayload
         | null;
 
-      if (!response.ok || !payload?.clientSecret || !payload.sessionId) {
+      const resolvedClientSecret = payload?.client_secret ?? payload?.clientSecret;
+      const resolvedSessionId = payload?.checkout_session_id ?? payload?.sessionId;
+
+      if (!response.ok || !resolvedClientSecret || !resolvedSessionId) {
         setError(payload?.error ?? "Unable to initialize checkout.");
         setLoadingCheckout(false);
         return;
       }
 
-      setSessionId(payload.sessionId);
-      setClientSecret(payload.clientSecret);
+      setSessionId(resolvedSessionId);
+      setClientSecret(resolvedClientSecret);
       setLoadingCheckout(false);
     } catch {
       setError("Unable to initialize checkout.");
       setLoadingCheckout(false);
     }
-  }, [businessId, open, publishableKey, returnPath, selectedPlan]);
+  }, [
+    businessDraft,
+    businessId,
+    intent,
+    open,
+    publishableKey,
+    returnPath,
+    selectedPlan,
+  ]);
 
   useEffect(() => {
-    if (!open || !sessionId || !businessId) return;
+    if (!open || !sessionId) return;
 
     let active = true;
     let nextTimer: ReturnType<typeof setTimeout> | null = null;
@@ -336,16 +369,29 @@ export default function EmbeddedCheckoutModal({
         const billingStatus = payload?.billingStatus ?? null;
         const billingIsActive =
           billingStatus === "active" || billingStatus === "trialing";
+        const shouldFinalize =
+          intent === "new_business"
+            ? Boolean(payload?.complete)
+            : Boolean(payload?.complete && (billingIsActive || billingStatus === null));
 
-        if (payload?.complete && (billingIsActive || billingStatus === null)) {
+        if (shouldFinalize) {
           setLoadingStatus(false);
-          await onSuccess?.({
-            businessId,
-            businessName,
-            billingStatus,
-            sessionId,
-            plan: selectedPlan,
-          });
+          try {
+            await onSuccess?.({
+              businessId,
+              businessName,
+              billingStatus,
+              sessionId,
+              plan: selectedPlan,
+            });
+          } catch (error: unknown) {
+            setError(
+              error instanceof Error
+                ? error.message
+                : "Unable to finalize checkout."
+            );
+            return;
+          }
           closeAfterSuccess();
           return;
         }
@@ -376,6 +422,7 @@ export default function EmbeddedCheckoutModal({
     businessId,
     businessName,
     closeAfterSuccess,
+    intent,
     onSuccess,
     open,
     selectedPlan,

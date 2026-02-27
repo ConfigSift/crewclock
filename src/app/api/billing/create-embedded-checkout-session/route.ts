@@ -12,6 +12,16 @@ import {
 type RequestBody = {
   business_id?: string;
   plan?: BillingPlan;
+  price_id?: string;
+  intent?: "existing_business" | "new_business";
+  businessDraft?: {
+    name?: string;
+    address_line1?: string;
+    city?: string;
+    state?: string;
+    postal_code?: string;
+    country?: string;
+  };
   return_path?: string;
 };
 
@@ -29,6 +39,11 @@ type BusinessRow = {
   name: string;
   stripe_customer_id: string | null;
 };
+
+function optionalString(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
 
 function jsonNoStore(payload: Record<string, unknown>, status: number) {
   return NextResponse.json(payload, {
@@ -71,46 +86,63 @@ export async function POST(request: Request) {
 
     const body = (await request.json().catch(() => ({}))) as RequestBody;
     const businessId = (body.business_id ?? "").trim();
-    const plan = body.plan;
-    const requestedReturnPath = (body.return_path ?? "/onboarding/step-3").trim();
-
-    if (!businessId) {
-      return jsonNoStore({ error: "business_id is required." }, 400);
-    }
-    if (plan !== "monthly" && plan !== "annual") {
-      return jsonNoStore({ error: "plan must be 'monthly' or 'annual'." }, 400);
-    }
-
-    const admin = createAdminClient();
-    const { data: business, error: businessError } = await admin
-      .from("businesses")
-      .select("id, account_id, name, stripe_customer_id")
-      .eq("id", businessId)
-      .single();
-
-    if (businessError || !business) {
-      return jsonNoStore({ error: "Business not found." }, 404);
-    }
-
-    const businessRow = business as BusinessRow;
+    const requestedIntent = body.intent === "new_business" ? "new_business" : "existing_business";
+    const requestedPlan = body.plan;
+    const requestedPriceId = (body.price_id ?? "").trim();
+    const requestedReturnPath = (
+      body.return_path ??
+      (requestedIntent === "new_business" ? "/dashboard/account" : "/onboarding/step-3")
+    ).trim();
     const actorAccountId = actorProfile.account_id ?? actorProfile.company_id;
-    if (businessRow.account_id !== actorAccountId) {
+    const admin = createAdminClient();
+
+    const monthlyPriceId = getStripePriceId("monthly");
+    const annualPriceId = getStripePriceId("annual");
+
+    let resolvedPlan: BillingPlan | null = null;
+    let resolvedPriceId = "";
+
+    if (requestedPlan === "monthly" || requestedPlan === "annual") {
+      resolvedPlan = requestedPlan;
+      resolvedPriceId = getStripePriceId(requestedPlan);
+    }
+
+    if (requestedPriceId) {
+      if (requestedPriceId === monthlyPriceId) {
+        if (resolvedPlan && resolvedPlan !== "monthly") {
+          return jsonNoStore({ error: "price_id does not match plan." }, 400);
+        }
+        resolvedPlan = "monthly";
+        resolvedPriceId = monthlyPriceId;
+      } else if (requestedPriceId === annualPriceId) {
+        if (resolvedPlan && resolvedPlan !== "annual") {
+          return jsonNoStore({ error: "price_id does not match plan." }, 400);
+        }
+        resolvedPlan = "annual";
+        resolvedPriceId = annualPriceId;
+      } else {
+        return jsonNoStore({ error: "Unsupported price_id." }, 400);
+      }
+    }
+
+    if (!resolvedPlan || !resolvedPriceId) {
       return jsonNoStore(
-        { error: "You do not have access to that business." },
-        403
+        { error: "Provide a valid plan ('monthly' or 'annual') or supported price_id." },
+        400
       );
     }
 
-    const priceId = getStripePriceId(plan);
     const siteUrl = getSiteUrl();
     const normalizedReturnPath = requestedReturnPath.startsWith("/")
       ? requestedReturnPath
-      : "/onboarding/step-3";
+      : requestedIntent === "new_business"
+        ? "/dashboard/account"
+        : "/onboarding/step-3";
     const returnUrl = new URL(normalizedReturnPath, `${siteUrl}/`);
     returnUrl.searchParams.set("session_id", "{CHECKOUT_SESSION_ID}");
     const firstMonthPromoCodeId =
       process.env.STRIPE_PROMO_FIRSTMONTH1?.trim() ?? "";
-    const shouldApplyFirstMonthDiscount = plan === "monthly";
+    const shouldApplyFirstMonthDiscount = resolvedPlan === "monthly";
 
     if (shouldApplyFirstMonthDiscount && !firstMonthPromoCodeId) {
       return jsonNoStore(
@@ -121,39 +153,119 @@ export async function POST(request: Request) {
 
     if (process.env.NODE_ENV !== "production") {
       console.log("[billing] checkout session", {
-        plan,
+        plan: resolvedPlan,
+        intent: requestedIntent,
         discountApplied: shouldApplyFirstMonthDiscount,
       });
     }
 
-    let customerId = businessRow.stripe_customer_id;
-    if (!customerId) {
+    let customerId = "";
+    let resolvedBusinessId: string | null = null;
+    let sessionMetadata: Record<string, string> = {
+      intent: requestedIntent,
+    };
+
+    if (requestedIntent === "new_business") {
+      const businessDraft = body.businessDraft ?? {};
+      const draftName = optionalString(businessDraft.name);
+      if (!draftName) {
+        return jsonNoStore({ error: "businessDraft.name is required." }, 400);
+      }
+
+      const { data: existingByName, error: existingByNameError } = await admin
+        .from("businesses")
+        .select("id")
+        .eq("account_id", actorAccountId)
+        .ilike("name", draftName)
+        .limit(1);
+
+      if (existingByNameError) {
+        return jsonNoStore({ error: "Unable to validate business name." }, 400);
+      }
+      if ((existingByName ?? []).length > 0) {
+        return jsonNoStore({ error: "A business with that name already exists." }, 409);
+      }
+
+      const addressLine1 = optionalString(businessDraft.address_line1);
+      const city = optionalString(businessDraft.city);
+      const state = optionalString(businessDraft.state);
+      const postalCode = optionalString(businessDraft.postal_code);
+      const country = optionalString(businessDraft.country);
+
       const customer = await createStripeCustomer({
         email: user.email ?? null,
-        name: businessRow.name,
+        name: draftName,
         metadata: {
-          business_id: businessRow.id,
-          account_id: businessRow.account_id,
+          account_id: actorAccountId,
+          profile_id: actorProfile.id,
+          intent: "new_business",
+          business_name: draftName,
         },
       });
       customerId = customer.id;
-      await admin
+      sessionMetadata = {
+        ...sessionMetadata,
+        business_name: draftName,
+        address_line1: addressLine1,
+        city,
+        state,
+        postal_code: postalCode,
+        country,
+      };
+    } else {
+      if (!businessId) {
+        return jsonNoStore({ error: "business_id is required." }, 400);
+      }
+
+      const { data: business, error: businessError } = await admin
         .from("businesses")
-        .update({ stripe_customer_id: customerId })
-        .eq("id", businessRow.id);
+        .select("id, account_id, name, stripe_customer_id")
+        .eq("id", businessId)
+        .single();
+
+      if (businessError || !business) {
+        return jsonNoStore({ error: "Business not found." }, 404);
+      }
+
+      const businessRow = business as BusinessRow;
+      if (businessRow.account_id !== actorAccountId) {
+        return jsonNoStore(
+          { error: "You do not have access to that business." },
+          403
+        );
+      }
+
+      resolvedBusinessId = businessRow.id;
+      customerId = businessRow.stripe_customer_id ?? "";
+      if (!customerId) {
+        const customer = await createStripeCustomer({
+          email: user.email ?? null,
+          name: businessRow.name,
+          metadata: {
+            business_id: businessRow.id,
+            account_id: businessRow.account_id,
+          },
+        });
+        customerId = customer.id;
+        await admin
+          .from("businesses")
+          .update({ stripe_customer_id: customerId })
+          .eq("id", businessRow.id);
+      }
     }
 
     const session = await createEmbeddedSubscriptionCheckoutSession({
       customerId,
-      businessId: businessRow.id,
-      accountId: businessRow.account_id,
+      businessId: resolvedBusinessId,
+      accountId: actorAccountId,
       profileId: actorProfile.id,
-      plan,
-      priceId,
+      plan: resolvedPlan,
+      priceId: resolvedPriceId,
       returnUrl: returnUrl.toString(),
       promotionCodeId: shouldApplyFirstMonthDiscount
         ? firstMonthPromoCodeId
         : undefined,
+      metadata: sessionMetadata,
     });
 
     if (!session.client_secret) {
@@ -165,9 +277,11 @@ export async function POST(request: Request) {
 
     return jsonNoStore(
       {
+        client_secret: session.client_secret,
+        checkout_session_id: session.id,
         clientSecret: session.client_secret,
         sessionId: session.id,
-        plan,
+        plan: resolvedPlan,
       },
       200
     );

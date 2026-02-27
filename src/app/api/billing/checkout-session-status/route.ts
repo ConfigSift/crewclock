@@ -84,10 +84,52 @@ export async function GET(request: Request) {
     }
 
     const checkoutSession = await retrieveCheckoutSession(sessionId);
+    const checkoutIntent = checkoutSession.metadata?.intent ?? "existing_business";
     const businessId =
       checkoutSession.metadata?.business_id ??
       checkoutSession.client_reference_id ??
       null;
+    const actorAccountId = actorProfile.account_id ?? actorProfile.company_id;
+
+    const sessionComplete =
+      checkoutSession.status === "complete" ||
+      checkoutSession.payment_status === "paid";
+    let subscription: StripeSubscription | null = null;
+
+    if (sessionComplete) {
+      if (typeof checkoutSession.subscription === "string") {
+        subscription = await retrieveSubscription(checkoutSession.subscription);
+      } else if (checkoutSession.subscription) {
+        subscription = checkoutSession.subscription;
+      }
+    }
+
+    if (checkoutIntent === "new_business") {
+      const sessionAccountId = checkoutSession.metadata?.account_id ?? null;
+      if (sessionAccountId && sessionAccountId !== actorAccountId) {
+        return jsonNoStore(
+          { error: "You do not have access to that checkout session." },
+          403
+        );
+      }
+
+      const billingStatus = subscription
+        ? mapStripeSubscriptionStatusToBillingStatus(subscription.status)
+        : null;
+      const priceId = subscription ? getSubscriptionPriceId(subscription) : null;
+      return jsonNoStore(
+        {
+          complete: Boolean(sessionComplete),
+          status: checkoutSession.status ?? null,
+          paymentStatus: checkoutSession.payment_status ?? null,
+          billingStatus,
+          subscriptionId: subscription?.id ?? null,
+          priceId,
+          intent: "new_business",
+        },
+        200
+      );
+    }
 
     if (!businessId) {
       return jsonNoStore({ error: "Could not resolve business for checkout session." }, 400);
@@ -104,24 +146,12 @@ export async function GET(request: Request) {
       return jsonNoStore({ error: "Business not found." }, 404);
     }
 
-    const actorAccountId = actorProfile.account_id ?? actorProfile.company_id;
     const businessRow = business as BusinessRow;
     if (businessRow.account_id !== actorAccountId) {
       return jsonNoStore(
         { error: "You do not have access to that checkout session." },
         403
       );
-    }
-
-    const sessionComplete = checkoutSession.status === "complete";
-    let subscription: StripeSubscription | null = null;
-
-    if (sessionComplete) {
-      if (typeof checkoutSession.subscription === "string") {
-        subscription = await retrieveSubscription(checkoutSession.subscription);
-      } else if (checkoutSession.subscription) {
-        subscription = checkoutSession.subscription;
-      }
     }
 
     if (sessionComplete && subscription) {

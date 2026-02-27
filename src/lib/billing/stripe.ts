@@ -152,20 +152,23 @@ export async function createStripeCustomer(input: {
 
 export async function createEmbeddedSubscriptionCheckoutSession(input: {
   customerId: string;
-  businessId: string;
+  businessId?: string | null;
   accountId: string;
   profileId: string;
   plan: BillingPlan;
   priceId: string;
   returnUrl: string;
   promotionCodeId?: string;
+  metadata?: Record<string, string>;
 }): Promise<StripeCheckoutSession> {
   const form = new URLSearchParams();
   form.set("mode", "subscription");
   form.set("ui_mode", "embedded");
   form.set("customer", input.customerId);
   form.set("return_url", input.returnUrl);
-  form.set("client_reference_id", input.businessId);
+  if (input.businessId) {
+    form.set("client_reference_id", input.businessId);
+  }
   form.set("line_items[0][price]", input.priceId);
   form.set("line_items[0][quantity]", "1");
   if (input.promotionCodeId) {
@@ -173,14 +176,22 @@ export async function createEmbeddedSubscriptionCheckoutSession(input: {
   } else {
     form.set("allow_promotion_codes", "true");
   }
-  form.set("metadata[business_id]", input.businessId);
   form.set("metadata[account_id]", input.accountId);
   form.set("metadata[profile_id]", input.profileId);
   form.set("metadata[plan]", input.plan);
-  form.set("subscription_data[metadata][business_id]", input.businessId);
   form.set("subscription_data[metadata][account_id]", input.accountId);
   form.set("subscription_data[metadata][profile_id]", input.profileId);
   form.set("subscription_data[metadata][plan]", input.plan);
+  if (input.businessId) {
+    form.set("metadata[business_id]", input.businessId);
+    form.set("subscription_data[metadata][business_id]", input.businessId);
+  }
+  if (input.metadata) {
+    Object.entries(input.metadata).forEach(([key, value]) => {
+      form.set(`metadata[${key}]`, value);
+      form.set(`subscription_data[metadata][${key}]`, value);
+    });
+  }
 
   return stripeRequest<StripeCheckoutSession>("checkout/sessions", {
     method: "POST",

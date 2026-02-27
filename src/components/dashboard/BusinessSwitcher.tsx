@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
-  Loader2,
   Plus,
   X,
 } from "lucide-react";
@@ -24,7 +23,7 @@ const emptyCreateForm = {
 type BusinessSwitcherProps = {
   mobile?: boolean;
   onCheckoutSuccess?: (business: { id: string; name: string }) => void;
-  onCheckoutCanceled?: (business: { id: string; name: string }) => void;
+  onCheckoutCanceled?: (draft: { name: string }) => void;
 };
 
 export default function BusinessSwitcher({
@@ -38,20 +37,15 @@ export default function BusinessSwitcher({
     activeBusinessId,
     setActiveBusinessId,
     loading,
-    createBusiness,
     refreshBusinesses,
   } = useBusiness();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createForm, setCreateForm] = useState(emptyCreateForm);
   const [createError, setCreateError] = useState("");
-  const [creating, setCreating] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [billingWarning, setBillingWarning] = useState<string | null>(null);
   const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
-  const [checkoutBusiness, setCheckoutBusiness] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
+  const [pendingDraft, setPendingDraft] = useState<typeof emptyCreateForm | null>(null);
 
   const isAdmin = profile?.role === "admin";
 
@@ -62,39 +56,30 @@ export default function BusinessSwitcher({
   }, [toastMessage]);
 
   const closeCreateModal = () => {
-    if (creating) return;
     setShowCreateModal(false);
     setCreateError("");
     setCreateForm(emptyCreateForm);
   };
 
-  const handleCreateBusiness = async () => {
+  const handleOpenCheckoutForDraft = () => {
     if (!createForm.name.trim()) {
       setCreateError("Business name is required.");
       return;
     }
 
-    setCreating(true);
     setCreateError("");
-
-    const result = await createBusiness(createForm);
-
-    if (result.error) {
-      setCreateError(result.error);
-      setCreating(false);
-      return;
-    }
-
-    if (result.business) {
-      setCheckoutBusiness(result.business);
-      setCheckoutModalOpen(true);
-      setBillingWarning(null);
-    }
-
+    setPendingDraft({
+      name: createForm.name.trim(),
+      address_line1: createForm.address_line1.trim(),
+      city: createForm.city.trim(),
+      state: createForm.state.trim(),
+      postal_code: createForm.postal_code.trim(),
+      country: createForm.country.trim(),
+    });
     setShowCreateModal(false);
-    setCreateForm(emptyCreateForm);
-    setCreating(false);
-    setToastMessage("Business created. Complete billing setup.");
+    setCheckoutModalOpen(true);
+    setBillingWarning(null);
+    setToastMessage("Continue to payment to create this business.");
   };
 
   const labelClass = mobile
@@ -177,8 +162,7 @@ export default function BusinessSwitcher({
               <button
                 type="button"
                 onClick={closeCreateModal}
-                disabled={creating}
-                className="text-text-muted hover:text-text p-1 disabled:opacity-50"
+                className="text-text-muted hover:text-text p-1"
               >
                 <X size={20} />
               </button>
@@ -195,7 +179,6 @@ export default function BusinessSwitcher({
                 onChange={(event) =>
                   setCreateForm((prev) => ({ ...prev, name: event.target.value }))
                 }
-                disabled={creating}
               />
 
               <label className="block text-[11px] font-bold text-text-muted uppercase tracking-widest mb-1.5">
@@ -211,7 +194,6 @@ export default function BusinessSwitcher({
                     address_line1: event.target.value,
                   }))
                 }
-                disabled={creating}
               />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-3.5">
@@ -226,7 +208,6 @@ export default function BusinessSwitcher({
                     onChange={(event) =>
                       setCreateForm((prev) => ({ ...prev, city: event.target.value }))
                     }
-                    disabled={creating}
                   />
                 </div>
                 <div>
@@ -240,7 +221,6 @@ export default function BusinessSwitcher({
                     onChange={(event) =>
                       setCreateForm((prev) => ({ ...prev, state: event.target.value }))
                     }
-                    disabled={creating}
                   />
                 </div>
               </div>
@@ -260,7 +240,6 @@ export default function BusinessSwitcher({
                         postal_code: event.target.value,
                       }))
                     }
-                    disabled={creating}
                   />
                 </div>
                 <div>
@@ -274,7 +253,6 @@ export default function BusinessSwitcher({
                     onChange={(event) =>
                       setCreateForm((prev) => ({ ...prev, country: event.target.value }))
                     }
-                    disabled={creating}
                   />
                 </div>
               </div>
@@ -289,25 +267,16 @@ export default function BusinessSwitcher({
                 <button
                   type="button"
                   onClick={closeCreateModal}
-                  disabled={creating}
-                  className="flex-1 py-3 border border-border rounded-xl text-text-muted text-sm font-semibold hover:bg-bg transition-colors disabled:opacity-50"
+                  className="flex-1 py-3 border border-border rounded-xl text-text-muted text-sm font-semibold hover:bg-bg transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={handleCreateBusiness}
-                  disabled={creating}
-                  className="flex-[2] py-3 bg-gradient-to-br from-accent to-accent-dark rounded-xl text-bg text-sm font-extrabold shadow-[0_4px_20px_var(--color-accent-glow)] hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:transform-none"
+                  onClick={handleOpenCheckoutForDraft}
+                  className="flex-[2] py-3 bg-gradient-to-br from-accent to-accent-dark rounded-xl text-bg text-sm font-extrabold shadow-[0_4px_20px_var(--color-accent-glow)] hover:-translate-y-0.5 transition-all"
                 >
-                  {creating ? (
-                    <span className="inline-flex items-center gap-1.5">
-                      <Loader2 size={14} className="animate-spin" />
-                      Creating...
-                    </span>
-                  ) : (
-                    "Create Business"
-                  )}
+                  Continue to Payment
                 </button>
               </div>
             </div>
@@ -326,28 +295,55 @@ export default function BusinessSwitcher({
 
       <EmbeddedCheckoutModal
         open={checkoutModalOpen}
-        businessId={checkoutBusiness?.id ?? null}
-        businessName={checkoutBusiness?.name ?? null}
+        intent="new_business"
+        businessName={pendingDraft?.name ?? null}
+        businessDraft={pendingDraft}
         returnPath="/dashboard/account"
         onClose={() => {
           setCheckoutModalOpen(false);
         }}
         onCancel={() => {
-          if (!checkoutBusiness) return;
-          setActiveBusinessId(checkoutBusiness.id);
-          void refreshBusinesses();
-          setBillingWarning(
-            `${checkoutBusiness.name} created. Subscription required to use this business.`
+          const draftName = pendingDraft?.name?.trim() ?? "Business";
+          setBillingWarning(`${draftName} was not created. Complete checkout to create it.`);
+          setCreateForm(
+            pendingDraft ?? {
+              ...emptyCreateForm,
+            }
           );
-          onCheckoutCanceled?.(checkoutBusiness);
+          setShowCreateModal(true);
+          onCheckoutCanceled?.({ name: draftName });
         }}
-        onSuccess={async () => {
-          if (!checkoutBusiness) return;
+        onSuccess={async ({ sessionId }) => {
+          const response = await fetch("/api/businesses/complete-from-checkout", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ checkout_session_id: sessionId }),
+            cache: "no-store",
+          });
+          const payload = (await response.json().catch(() => null)) as
+            | {
+                error?: string;
+                business?: { id?: string; name?: string };
+              }
+            | null;
+
+          const createdBusinessId = payload?.business?.id;
+          const createdBusinessName = payload?.business?.name;
+          if (
+            !response.ok ||
+            typeof createdBusinessId !== "string" ||
+            typeof createdBusinessName !== "string"
+          ) {
+            throw new Error(payload?.error ?? "Unable to create business from checkout.");
+          }
+
           await refreshBusinesses();
-          setActiveBusinessId(checkoutBusiness.id);
+          setActiveBusinessId(createdBusinessId);
           setBillingWarning(null);
-          setToastMessage(`Subscription active for ${checkoutBusiness.name}`);
-          onCheckoutSuccess?.(checkoutBusiness);
+          setPendingDraft(null);
+          setCreateForm(emptyCreateForm);
+          setToastMessage("Business created and subscribed.");
+          onCheckoutSuccess?.({ id: createdBusinessId, name: createdBusinessName });
         }}
       />
     </>

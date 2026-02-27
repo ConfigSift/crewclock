@@ -205,7 +205,7 @@ export default function AccountPage() {
           onCheckoutCanceled={(business) => {
             setBillingFlowMessage({
               tone: "warning",
-              text: `${business.name} created. Subscription required to use this business.`,
+              text: `${business.name} was not created because checkout was canceled.`,
             });
             setSubscriptionRefreshToken((current) => current + 1);
           }}
