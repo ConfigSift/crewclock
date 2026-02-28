@@ -8,6 +8,16 @@ type Body = {
   business_id?: string;
 };
 
+type TimeEntrySnapshot = {
+  id: string;
+  business_id: string | null;
+  employee_id: string;
+  project_id: string;
+  clock_out: string | null;
+  clock_out_lat: number | null;
+  clock_out_lng: number | null;
+};
+
 function jsonNoStore(payload: Record<string, unknown>, status: number) {
   return NextResponse.json(payload, {
     status,
@@ -58,6 +68,51 @@ async function requireManagerAdminOrOwner() {
   };
 }
 
+async function logManagerClockOutEventBestEffort(
+  sessionClient: Awaited<ReturnType<typeof createClient>>,
+  entryId: string
+) {
+  try {
+    if (!entryId) return;
+
+    const { data: entry, error: entryError } = await sessionClient
+      .from("time_entries")
+      .select(
+        "id, business_id, employee_id, project_id, clock_out, clock_out_lat, clock_out_lng"
+      )
+      .eq("id", entryId)
+      .maybeSingle();
+
+    if (entryError || !entry) return;
+
+    const snapshot = entry as TimeEntrySnapshot;
+    if (!snapshot.business_id) return;
+
+    const { error: insertError } = await sessionClient.from("time_entry_events").insert({
+      business_id: snapshot.business_id,
+      time_entry_id: snapshot.id,
+      employee_id: snapshot.employee_id,
+      event_type: "manager_clock_out",
+      occurred_at: snapshot.clock_out ?? new Date().toISOString(),
+      lat: snapshot.clock_out_lat,
+      lng: snapshot.clock_out_lng,
+      metadata: {
+        source: "manager_api",
+        project_id: snapshot.project_id,
+      },
+    });
+
+    if (insertError && insertError.code !== "42P01") {
+      console.error("[time-entry-events] manager clock-out event insert failed", {
+        code: insertError.code ?? null,
+        message: insertError.message,
+      });
+    }
+  } catch (error) {
+    console.error("[time-entry-events] manager clock-out event logging failed", error);
+  }
+}
+
 export async function POST(request: Request) {
   const context = await requireManagerAdminOrOwner();
   if ("error" in context) return context.error;
@@ -102,6 +157,12 @@ export async function POST(request: Request) {
       400
     );
   }
+
+  const rpcResult =
+    data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+  const entryId =
+    rpcResult && typeof rpcResult.entry_id === "string" ? rpcResult.entry_id : "";
+  void logManagerClockOutEventBestEffort(context.sessionClient, entryId);
 
   return jsonNoStore((data ?? { success: true }) as Record<string, unknown>, 200);
 }

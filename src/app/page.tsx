@@ -11,9 +11,9 @@ export default async function Home() {
   if (user) {
     const { data: profile } = await supabase
       .from("profiles")
-      .select("role")
+      .select("id, role")
       .eq("id", user.id)
-      .maybeSingle();
+      .single();
 
     const role = (profile as { role?: string } | null)?.role;
     if (role === "worker") {

@@ -71,15 +71,20 @@ export async function updateSession(request: NextRequest) {
 
   const getProfileSnapshot = async (): Promise<ProfileSnapshot | null> => {
     if (!user) return null;
+    const queryFilterId = user.id;
 
     const withOnboarding = await supabase
       .from("profiles")
       .select("role, onboarding_step_completed, company_id, account_id")
-      .eq("id", user.id)
-      .maybeSingle();
+      .eq("id", queryFilterId)
+      .single();
 
     if (!withOnboarding.error) {
       return (withOnboarding.data as ProfileSnapshot | null) ?? null;
+    }
+
+    if (withOnboarding.error.code === "PGRST116") {
+      return null;
     }
 
     const errorMessage = withOnboarding.error.message ?? "";
@@ -92,8 +97,8 @@ export async function updateSession(request: NextRequest) {
     const roleOnly = await supabase
       .from("profiles")
       .select("role, company_id, account_id")
-      .eq("id", user.id)
-      .maybeSingle();
+      .eq("id", queryFilterId)
+      .single();
 
     if (roleOnly.error || !roleOnly.data) return null;
     const roleOnlyData = roleOnly.data as {
@@ -109,10 +114,19 @@ export async function updateSession(request: NextRequest) {
     };
   };
 
+  const redirectWithSessionCookies = (url: URL) => {
+    const response = NextResponse.redirect(url);
+    const refreshedCookies = supabaseResponse.cookies.getAll();
+    refreshedCookies.forEach((cookie) => {
+      response.cookies.set(cookie.name, cookie.value);
+    });
+    return response;
+  };
+
   if (!user) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
-    return NextResponse.redirect(url);
+    return redirectWithSessionCookies(url);
   }
 
   const profile = await getProfileSnapshot();
@@ -122,7 +136,7 @@ export async function updateSession(request: NextRequest) {
   if (needsOnboarding && isDashboard) {
     const url = request.nextUrl.clone();
     url.pathname = "/onboarding/step-1";
-    return NextResponse.redirect(url);
+    return redirectWithSessionCookies(url);
   }
 
   if (isDashboard) {
@@ -131,7 +145,7 @@ export async function updateSession(request: NextRequest) {
     if (profile?.role === "worker" && !accountPagePath) {
       const url = request.nextUrl.clone();
       url.pathname = "/clock";
-      return NextResponse.redirect(url);
+      return redirectWithSessionCookies(url);
     }
 
     if (!accountPagePath) {
@@ -149,7 +163,7 @@ export async function updateSession(request: NextRequest) {
         const url = request.nextUrl.clone();
         url.pathname = "/dashboard/account";
         url.searchParams.set("billing", "required");
-        return NextResponse.redirect(url);
+        return redirectWithSessionCookies(url);
       }
 
       const { data: business, error: businessError } = await supabase
@@ -169,7 +183,7 @@ export async function updateSession(request: NextRequest) {
         const url = request.nextUrl.clone();
         url.pathname = "/dashboard/account";
         url.searchParams.set("billing", "required");
-        return NextResponse.redirect(url);
+        return redirectWithSessionCookies(url);
       }
 
       const billingStatusEligible =
@@ -187,7 +201,7 @@ export async function updateSession(request: NextRequest) {
         const url = request.nextUrl.clone();
         url.pathname = "/dashboard/account";
         url.searchParams.set("billing", "required");
-        return NextResponse.redirect(url);
+        return redirectWithSessionCookies(url);
       }
     }
   }
@@ -196,7 +210,7 @@ export async function updateSession(request: NextRequest) {
     const dest = getPostLoginPath(profile.role);
     const url = request.nextUrl.clone();
     url.pathname = dest;
-    return NextResponse.redirect(url);
+    return redirectWithSessionCookies(url);
   }
 
   return supabaseResponse;

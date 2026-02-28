@@ -39,22 +39,7 @@ function formatSupabaseError(error: SupabaseError): string {
 async function logTimeEntryEventBestEffort(
   payload: TimeEntryEventPayload
 ): Promise<void> {
-  const shouldDebugTimeEvents =
-    process.env.NEXT_PUBLIC_DEBUG_TIME_EVENTS === "1" ||
-    process.env.NODE_ENV !== "production";
-
   try {
-    if (shouldDebugTimeEvents) {
-      console.log("[time-entry-events] sending event payload", {
-        event_type: payload.event_type,
-        time_entry_id: payload.time_entry_id,
-        has_lat_lng: typeof payload.lat === "number" && typeof payload.lng === "number",
-        has_project_id: typeof payload.project_id === "string" && payload.project_id.length > 0,
-        has_occurred_at:
-          typeof payload.occurred_at === "string" && payload.occurred_at.length > 0,
-      });
-    }
-
     const response = await fetch("/api/time-entries/event", {
       method: "POST",
       headers: {
@@ -64,32 +49,18 @@ async function logTimeEntryEventBestEffort(
       body: JSON.stringify(payload),
     });
 
-    if (!response.ok) {
-      const rawBody = await response.text().catch(() => "");
-      if (shouldDebugTimeEvents) {
-        const errorDetails = {
-          status: response.status,
-          statusText: response.statusText,
-          rawBody,
-          event_type: payload.event_type,
-          time_entry_id: payload.time_entry_id,
-        };
-        console.error(
-          "[time-entry-events] failed to log event " + JSON.stringify(errorDetails)
-        );
-      }
-      return;
-    }
-
-    if (shouldDebugTimeEvents) {
-      console.log("[time-entry-events] event logged", {
+    if (!response.ok && process.env.NODE_ENV !== "production") {
+      const failurePayload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      console.error("[time-entry-events] failed to log event", {
         status: response.status,
+        error: failurePayload.error ?? "unknown",
         event_type: payload.event_type,
-        time_entry_id: payload.time_entry_id,
       });
     }
   } catch (error) {
-    if (shouldDebugTimeEvents) {
+    if (process.env.NODE_ENV !== "production") {
       console.error("[time-entry-events] event logging request failed", error);
     }
   }
@@ -254,4 +225,3 @@ export async function signOut() {
   const supabase = createClient();
   await supabase.auth.signOut();
 }
-

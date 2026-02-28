@@ -46,6 +46,14 @@ type ExistingProfile = {
   account_id: string | null;
 };
 
+type ActorMembershipRow = {
+  profile_id: string;
+  role: StaffRole;
+  is_active: boolean;
+  updated_at: string | null;
+  created_at: string | null;
+};
+
 function jsonNoStore(payload: Record<string, unknown>, status: number) {
   return NextResponse.json(payload, {
     status,
@@ -123,7 +131,29 @@ function authLogGuidance(): string {
 }
 
 function membershipRoleFor(role: UserRole): StaffRole {
-  return role === "manager" ? "manager" : "worker";
+  if (role === "worker") return "worker";
+  if (role === "manager" || role === "admin") return "manager";
+  const _never: never = role;
+  return _never;
+}
+
+function chooseActorMembership(rows: ActorMembershipRow[]): ActorMembershipRow | null {
+  const activeRows = rows.filter((row) => row.is_active);
+  if (activeRows.length === 0) return null;
+
+  const sorted = [...activeRows].sort((a, b) => {
+    const roleRank = (value: StaffRole) => (value === "manager" ? 2 : 1);
+    const byRole = roleRank(b.role) - roleRank(a.role);
+    if (byRole !== 0) return byRole;
+
+    const aUpdated = Date.parse(a.updated_at ?? a.created_at ?? "");
+    const bUpdated = Date.parse(b.updated_at ?? b.created_at ?? "");
+    const safeA = Number.isFinite(aUpdated) ? aUpdated : 0;
+    const safeB = Number.isFinite(bUpdated) ? bUpdated : 0;
+    return safeB - safeA;
+  });
+
+  return sorted[0] ?? null;
 }
 
 async function getManagerContext() {
@@ -207,19 +237,40 @@ async function requireBusinessAccess(
   }
 
   if (actorProfile.role !== "admin") {
-    const { data: actorMembership } = await sessionClient
+    const { data: actorMembershipRows, error: actorMembershipError } = await sessionClient
       .from("business_memberships")
-      .select("profile_id")
+      .select("profile_id, role, is_active, updated_at, created_at")
       .eq("business_id", businessId)
-      .eq("profile_id", actorProfile.id)
-      .eq("is_active", true)
-      .maybeSingle();
+      .eq("profile_id", actorProfile.id);
 
-    if (!actorMembership) {
+    if (actorMembershipError) {
+      return {
+        ok: false,
+        response: jsonNoStore(
+          { error: "Unable to load your membership for this business." },
+          400
+        ),
+      };
+    }
+
+    const typedRows = (actorMembershipRows ?? []) as ActorMembershipRow[];
+    const chosenMembership = chooseActorMembership(typedRows);
+
+    if (!chosenMembership) {
       return {
         ok: false,
         response: jsonNoStore(
           { error: "You are not an active member of this business." },
+          403
+        ),
+      };
+    }
+
+    if (actorProfile.role === "manager" && chosenMembership.role !== "manager") {
+      return {
+        ok: false,
+        response: jsonNoStore(
+          { error: "Manager membership is required for this business." },
           403
         ),
       };

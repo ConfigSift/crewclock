@@ -42,7 +42,7 @@ function DashboardLayoutShell({
             { href: "/dashboard/clock", icon: Clock, label: "My Time" },
             { href: "/dashboard/jobs", icon: Building2, label: "Jobs" },
             { href: "/dashboard/employees", icon: Users, label: "Crew" },
-            { href: "/dashboard/reports", icon: BarChart3, label: "Hours" },
+            { href: "/dashboard/reports", icon: BarChart3, label: "Reports" },
             { href: "/dashboard/account", icon: User, label: "Account" },
           ],
     [isWorker]

@@ -38,7 +38,10 @@ function optionalString(value: unknown): string | null {
 }
 
 function membershipRoleForActor(role: ActorProfile["role"]): MembershipRole {
-  return role === "worker" ? "worker" : "manager";
+  if (role === "worker") return "worker";
+  if (role === "manager" || role === "admin") return "manager";
+  const _never: never = role;
+  return _never;
 }
 
 async function requireAdminActor() {

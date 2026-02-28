@@ -26,6 +26,8 @@ type AutoSiteStatus =
   | "none"
   | "unavailable";
 
+type GeofenceEventType = "enter" | "exit";
+
 function LiveDot() {
   return (
     <span className="inline-block w-2 h-2 rounded-full bg-green animate-pulse-dot" />
@@ -69,6 +71,8 @@ export default function ClockPanel() {
   const [error, setError] = useState("");
 
   const initialGeoRequestedRef = useRef(false);
+  const geofenceLastInsideByShiftRef = useRef<Record<string, boolean | undefined>>({});
+  const geofenceLastEmitAtByProjectRef = useRef<Record<string, number>>({});
 
   const refreshMyActiveEntry = useCallback(async () => {
     const { createClient } = await import("@/lib/supabase/client");
@@ -186,6 +190,51 @@ export default function ClockPanel() {
     }
   }, [applyAutoSelection]);
 
+  const emitGeofenceEventBestEffort = useCallback(
+    async (args: {
+      projectId: string;
+      timeEntryId: string;
+      eventType: GeofenceEventType;
+      lat: number;
+      lng: number;
+    }) => {
+      try {
+        const response = await fetch("/api/geofence/event", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          cache: "no-store",
+          body: JSON.stringify({
+            project_id: args.projectId,
+            event_type: args.eventType,
+            occurred_at: new Date().toISOString(),
+            lat: args.lat,
+            lng: args.lng,
+            time_entry_id: args.timeEntryId,
+            source: "web",
+          }),
+        });
+
+        if (!response.ok && process.env.NODE_ENV !== "production") {
+          const payload = (await response.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          console.warn("[geofence-events] failed to log event", {
+            status: response.status,
+            event_type: args.eventType,
+            error: payload.error ?? "unknown",
+          });
+        }
+      } catch (eventError) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[geofence-events] request failed", eventError);
+        }
+      }
+    },
+    []
+  );
+
   // One location request on initial mount.
   useEffect(() => {
     if (initialGeoRequestedRef.current) return;
@@ -291,6 +340,80 @@ export default function ClockPanel() {
   const elapsed = activeEntry
     ? now - new Date(activeEntry.clock_in).getTime()
     : 0;
+
+  // Worker-only geofence state tracking while actively clocked in on one project.
+  useEffect(() => {
+    const isWorker = profile?.role === "worker";
+    const isRunningShift = Boolean(activeEntry && !activeEntry.clock_out);
+    const project = activeProject;
+
+    if (!isWorker || !isRunningShift || !activeEntry || !project) {
+      return;
+    }
+
+    const shiftKey = `${activeEntry.id}:${project.id}`;
+    const pollEveryMs = 30_000;
+    const minEmitIntervalMs = 30_000;
+
+    let cancelled = false;
+
+    const pollAndTrack = async () => {
+      try {
+        const pos = await getCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 10_000,
+          maximumAge: 20_000,
+        });
+
+        if (cancelled) return;
+
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const radius = project.geo_radius_m || 300;
+        const distanceMeters = haversineDistanceMeters(lat, lng, project.lat, project.lng);
+        const inside = distanceMeters <= radius;
+
+        const previousInside = geofenceLastInsideByShiftRef.current[shiftKey];
+        if (previousInside === undefined) {
+          geofenceLastInsideByShiftRef.current[shiftKey] = inside;
+          return;
+        }
+
+        if (previousInside === inside) {
+          geofenceLastInsideByShiftRef.current[shiftKey] = inside;
+          return;
+        }
+
+        const nowMs = Date.now();
+        const lastEmitAt = geofenceLastEmitAtByProjectRef.current[project.id] ?? 0;
+        if (nowMs - lastEmitAt < minEmitIntervalMs) {
+          return;
+        }
+
+        geofenceLastEmitAtByProjectRef.current[project.id] = nowMs;
+        geofenceLastInsideByShiftRef.current[shiftKey] = inside;
+        void emitGeofenceEventBestEffort({
+          projectId: project.id,
+          timeEntryId: activeEntry.id,
+          eventType: inside ? "enter" : "exit",
+          lat,
+          lng,
+        });
+      } catch {
+        // Location errors are expected on some devices/browsers; skip this poll tick.
+      }
+    };
+
+    void pollAndTrack();
+    const intervalId = window.setInterval(() => {
+      void pollAndTrack();
+    }, pollEveryMs);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeEntry, activeProject, emitGeofenceEventBestEffort, profile?.role]);
 
   // CLOCKED IN VIEW
   if (activeEntry && activeProject) {
